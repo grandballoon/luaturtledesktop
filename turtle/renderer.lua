@@ -36,7 +36,9 @@ function Renderer:ensure_init()
     if self.initialized then return true end
 
     ray.init_window(self.width, self.height, self.title)
-    ray.set_target_fps(60)
+    -- Disable fps cap during script execution; animated steps control timing
+    -- via explicit sleep() calls. Re-enabled in mainloop() for the idle loop.
+    ray.set_target_fps(0)
 
     -- Create offscreen render texture for persistent drawing
     ray.create_canvas(self.width, self.height)
@@ -245,13 +247,14 @@ function Renderer:frame_delay()
     if not self.core then return 0 end
     local s = self.core.speed_setting
     if s == 0 then return 0 end
-    -- speed 1 = 40ms, speed 10 = 4ms
-    return 0.04 / s
+    -- Exponential scale: speed 1 ~90ms/step, speed 10 ~2ms/step (~45x range)
+    return 0.09 * (0.65 ^ (s - 1))
 end
 
 -- Keep the window open until user closes it
 function Renderer:mainloop()
     if not self.initialized then return end
+    ray.set_target_fps(60)  -- Re-enable fps cap for idle loop
     self:_render_frame()
     while not ray.window_should_close() do
         self:_render_frame()
