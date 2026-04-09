@@ -4,7 +4,6 @@
 
 local Core = require("turtle.core")
 local Renderer = require("turtle.renderer")
-local colors = require("turtle.colors")
 
 ----------------------------------------------------------------
 -- Module table
@@ -18,46 +17,12 @@ local renderer = Renderer.new()
 renderer.core = core
 core.renderer = renderer
 
--- Expose core and renderer for advanced users
+-- Expose for advanced users
 turtle._core = core
 turtle._renderer = renderer
 
 ----------------------------------------------------------------
--- Helper: wrap a core method so it also triggers rendering
-----------------------------------------------------------------
-
-local function draw_cmd(method_name)
-    return function(...)
-        local result = {core[method_name](core, ...)}
-        -- Render after each drawing command
-        if core.speed_setting == 0 then
-            -- Instant mode: just mark that we need to render, but defer
-            -- until the next explicit render or done()
-        else
-            renderer:render()
-        end
-        if #result > 0 then
-            return table.unpack(result)
-        end
-    end
-end
-
--- State-only commands (no rendering needed)
-local function state_cmd(method_name)
-    return function(...)
-        return core[method_name](core, ...)
-    end
-end
-
--- Query commands (return values, no rendering)
-local function query_cmd(method_name)
-    return function(...)
-        return core[method_name](core, ...)
-    end
-end
-
-----------------------------------------------------------------
--- Animated forward/back
+-- Animated movement
 -- When speed > 0, break movement into visible steps.
 ----------------------------------------------------------------
 
@@ -69,20 +34,20 @@ local function animated_forward(distance)
     end
 
     if core.speed_setting == 0 then
-        -- Instant: just do it
         core:forward(distance)
         return
     end
 
     -- Break into steps for animation
-    local step_size = 2  -- pixels per animation step
+    local step_size = 2
     local steps = math.max(1, math.floor(math.abs(distance) / step_size))
     local step_dist = distance / steps
+    local delay = renderer:frame_delay()
 
     for i = 1, steps do
         core:forward(step_dist)
         renderer:render()
-        renderer:_sleep(renderer:_frame_delay())
+        if delay > 0 then renderer:sleep(delay) end
     end
 end
 
@@ -98,14 +63,15 @@ local function animated_right(angle)
         return
     end
 
-    local step_angle = 2  -- degrees per animation step
+    local step_angle = 2
     local steps = math.max(1, math.floor(math.abs(angle) / step_angle))
     local step = angle / steps
+    local delay = renderer:frame_delay()
 
     for i = 1, steps do
         core:right(step)
         renderer:render()
-        renderer:_sleep(renderer:_frame_delay())
+        if delay > 0 then renderer:sleep(delay) end
     end
 end
 
@@ -114,16 +80,6 @@ local function animated_left(angle)
 end
 
 local function animated_circle(radius, extent, steps)
-    -- For animated circle, we let core handle the polygon decomposition
-    -- but intercept the forward/left calls via the core directly.
-    -- The simplest approach: just call core:circle which calls
-    -- core:forward and core:left internally, then render.
-    --
-    -- For animation, we temporarily replace core methods... actually,
-    -- core:circle already calls self:forward and self:left, which
-    -- are on the core object. For animation we need to render between
-    -- each step. The cleanest approach: replicate the circle logic here.
-
     radius = radius or 0
     extent = extent or 360
     if radius == 0 then return end
@@ -141,57 +97,72 @@ local function animated_circle(radius, extent, steps)
         step_angle = -step_angle
     end
 
+    local delay = renderer:frame_delay()
+
     for i = 1, steps do
         core:left(step_angle / 2)
         core:forward(step_len)
         core:left(step_angle / 2)
         if core.speed_setting ~= 0 then
             renderer:render()
-            renderer:_sleep(renderer:_frame_delay())
+            if delay > 0 then renderer:sleep(delay) end
         end
-    end
-    if core.speed_setting == 0 then
-        renderer:render()
     end
 end
 
 ----------------------------------------------------------------
--- Commands that trigger a full redraw
+-- Draw command wrapper (renders after state change)
+----------------------------------------------------------------
+
+local function draw_cmd(method_name)
+    return function(...)
+        local result = {core[method_name](core, ...)}
+        if core.speed_setting ~= 0 then
+            renderer:render()
+        end
+        if #result > 0 then
+            return table.unpack(result)
+        end
+    end
+end
+
+----------------------------------------------------------------
+-- Commands that need a full redraw
 ----------------------------------------------------------------
 
 local function do_clear()
     core:clear()
-    renderer.needs_full_redraw = true
+    renderer:request_full_redraw()
     renderer:render()
 end
 
 local function do_reset()
     core:reset()
-    renderer.needs_full_redraw = true
+    renderer:request_full_redraw()
     renderer:render()
 end
 
 local function do_clearstamp(id)
     core:clearstamp(id)
-    renderer.needs_full_redraw = true
+    renderer:request_full_redraw()
     renderer:render()
 end
 
 local function do_clearstamps(n)
     core:clearstamps(n)
-    renderer.needs_full_redraw = true
+    renderer:request_full_redraw()
     renderer:render()
 end
 
 local function do_bgcolor(r, g, b, a)
     if r == nil then return core:bgcolor() end
     core:bgcolor(r, g, b, a)
-    renderer.needs_full_redraw = true
+    renderer:request_full_redraw()
     renderer:render()
 end
 
 ----------------------------------------------------------------
--- Build API table and export globals
+-- Build API table
 ----------------------------------------------------------------
 
 -- Movement (animated)
@@ -206,7 +177,7 @@ turtle.left      = animated_left
 turtle.lt        = animated_left
 turtle.circle    = animated_circle
 
--- Absolute positioning (draw command)
+-- Absolute positioning
 turtle.setpos       = draw_cmd("setpos")
 turtle.setposition  = draw_cmd("setpos")
 turtle.setx         = draw_cmd("setx")
@@ -214,9 +185,9 @@ turtle.sety         = draw_cmd("sety")
 turtle.setheading   = draw_cmd("setheading")
 turtle.seth         = draw_cmd("setheading")
 turtle.home         = draw_cmd("home")
-turtle.teleport     = draw_cmd("teleport")
+turtle.teleport     = function(x, y) core:teleport(x, y) end
 
--- Pen control (state commands that trigger render for visual feedback)
+-- Pen control
 turtle.penup     = function() core:penup() end
 turtle.pu        = turtle.penup
 turtle.up        = turtle.penup
@@ -260,15 +231,15 @@ turtle.reset   = do_reset
 turtle.bgcolor = do_bgcolor
 
 -- State queries
-turtle.position  = query_cmd("position")
-turtle.pos       = query_cmd("pos")
-turtle.xcor      = query_cmd("xcor")
-turtle.ycor      = query_cmd("ycor")
-turtle.heading   = query_cmd("heading")
-turtle.isdown    = query_cmd("isdown")
-turtle.isvisible = query_cmd("isvisible")
-turtle.towards   = query_cmd("towards")
-turtle.distance  = query_cmd("distance")
+turtle.position  = function() return core:position() end
+turtle.pos       = turtle.position
+turtle.xcor      = function() return core:xcor() end
+turtle.ycor      = function() return core:ycor() end
+turtle.heading   = function() return core:heading() end
+turtle.isdown    = function() return core:isdown() end
+turtle.isvisible = function() return core:isvisible() end
+turtle.towards   = function(x, y) return core:towards(x, y) end
+turtle.distance  = function(x, y) return core:distance(x, y) end
 
 -- Visibility
 turtle.showturtle = function() core:showturtle(); renderer:render() end
@@ -282,51 +253,32 @@ turtle.speed = function(n)
     core:speed(n)
 end
 
--- Degrees/radians mode (Python turtle compat)
-turtle.degrees = function(fullcircle)
-    -- For now, we only support degrees. Placeholder for future.
-end
-turtle.radians = function()
-    -- Placeholder for future radians mode.
-end
-
 -- tracer/update for batch drawing
 turtle.tracer = function(n, delay)
-    -- tracer(0) = turn off animation (like speed(0) but different semantics)
-    -- tracer(1) = normal
-    -- For now, map to speed
-    if n == 0 then
-        core:speed(0)
-    end
+    if n == 0 then core:speed(0) end
 end
 turtle.update = function()
-    renderer.needs_full_redraw = true
+    renderer:request_full_redraw()
     renderer:render()
 end
 
 -- Event loop
-turtle.done     = function() renderer:mainloop() end
+turtle.done     = function()
+    -- Final render (important for speed(0) batch mode)
+    renderer:request_full_redraw()
+    renderer:mainloop()
+end
 turtle.mainloop = turtle.done
 turtle.bye      = function() renderer:close() end
 
 ----------------------------------------------------------------
 -- Export all API functions as globals
--- This lets students write forward(100) instead of turtle.forward(100)
 ----------------------------------------------------------------
 
-local _G = _G
 for name, fn in pairs(turtle) do
     if type(fn) == "function" and not name:match("^_") then
         _G[name] = fn
     end
 end
-
-----------------------------------------------------------------
--- Render on first require if speed > 0
--- (Opens the window so it's visible even before any draw command)
-----------------------------------------------------------------
-
--- Don't auto-open; window opens lazily on first draw command.
--- This matches Python turtle behavior.
 
 return turtle
