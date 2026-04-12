@@ -127,6 +127,27 @@ test("end_fill with < 3 vertices creates no fill", function()
     assert(h.count_segments(t, "fill") == 0)
 end)
 
+test("fill segment precedes its outline lines in segment log", function()
+    local t = Core.new()
+    t:begin_fill()
+    for i = 1, 4 do t:forward(100); t:right(90) end
+    t:end_fill()
+    -- fill must come first so renderer draws it behind the outline
+    assert(t.segments[1].type == "fill", "fill should be first segment")
+    assert(t.segments[2].type == "line", "lines should follow fill")
+end)
+
+test("color(c) sets both pen and fill", function()
+    local t = Core.new()
+    t:color("white")
+    local pr, pg, pb = t:pencolor()
+    local fr, fg, fb = t:fillcolor()
+    h.assert_near(pr, 1, 0.001, "pen r")
+    h.assert_near(fr, 1, 0.001, "fill r")
+    h.assert_near(pg, 1, 0.001, "pen g")
+    h.assert_near(fg, 1, 0.001, "fill g")
+end)
+
 -- Dots ----------------------------------------------------------------
 
 test("dot creates segment", function()

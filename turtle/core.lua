@@ -36,6 +36,10 @@ function Core.new()
     -- Segment log (append-only)
     self.segments = {}
 
+    -- Line segments deferred during a fill so that end_fill() can log
+    -- the fill polygon first, ensuring it renders behind the outline.
+    self._fill_pending_segs = {}
+
     -- Stamp management
     self._next_stamp_id = 1
     self._cleared_stamps = {}  -- set of stamp IDs that have been cleared
@@ -89,6 +93,12 @@ end
 ----------------------------------------------------------------
 
 function Core:_log(entry)
+    -- Defer line segments drawn during a fill so the fill polygon can be
+    -- logged first at end_fill(), keeping it behind the outline in draw order.
+    if self.filling and entry.type == "line" then
+        table.insert(self._fill_pending_segs, entry)
+        return
+    end
     table.insert(self.segments, entry)
     return #self.segments
 end
@@ -274,9 +284,15 @@ function Core:fillcolor(r, g, b, a)
 end
 
 function Core:color(pen, fill)
-    -- Dual setter/getter like Python turtle
+    -- Dual setter/getter like Python turtle.
+    -- color()          → returns pen_color, fill_color
+    -- color(c)         → sets both pen and fill to c (Python behavior)
+    -- color(pen, fill) → sets pen and fill independently
     if pen == nil and fill == nil then
         return self.pen_color, self.fill_color
+    end
+    if fill == nil then
+        fill = pen  -- single arg: apply to both
     end
     if pen then
         if type(pen) == "string" then
@@ -301,12 +317,14 @@ end
 function Core:begin_fill()
     self.filling = true
     self.fill_vertices = {{self.x, self.y}}
+    self._fill_pending_segs = {}
 end
 
 function Core:end_fill()
     if not self.filling then return end
-    self.filling = false
+    self.filling = false  -- cleared before _log so deferred check is skipped
 
+    -- Log the fill polygon FIRST so the renderer draws it behind the outline.
     if #self.fill_vertices >= 3 then
         self:_log({
             type = "fill",
@@ -314,6 +332,12 @@ function Core:end_fill()
             color = {table.unpack(self.fill_color)},
         })
     end
+    -- Flush the deferred line segments; they land after fill in the log,
+    -- so the incremental renderer draws them on top of the fill.
+    for _, seg in ipairs(self._fill_pending_segs) do
+        table.insert(self.segments, seg)
+    end
+    self._fill_pending_segs = {}
     self.fill_vertices = {}
 end
 
@@ -420,7 +444,11 @@ end
 ----------------------------------------------------------------
 
 function Core:clear()
-    -- Clear drawing, preserve turtle state
+    -- Clear drawing, preserve turtle state.
+    -- Also cancels any in-progress fill so pending segments don't leak.
+    self.filling = false
+    self._fill_pending_segs = {}
+    self.fill_vertices = {}
     self:_log({ type = "clear" })
 end
 
@@ -435,6 +463,7 @@ function Core:reset()
     self.filling = false
     self.fill_vertices = {}
     self.fill_color = {1, 1, 1, 1}
+    self._fill_pending_segs = {}
     self.visible = true
     self._cleared_stamps = {}
     self:_log({ type = "clear" })
