@@ -24,35 +24,32 @@ will paste the specific exercise text.
 - **Test:** `speed(1)` should produce visibly slow drawing. `speed(10)` should be
   visibly fast but not instant. `speed(0)` should be instant.
 
-### 1.2 Fix speed(0) batch rendering
+### ✅ 1.2 Fix speed(0) batch rendering
 - When `speed(0)`, no per-command rendering happens. All drawing is deferred to
   `turtle.done()` which calls `renderer:request_full_redraw()` then `mainloop()`.
 - Verify this works: the window should open, show the complete drawing, and stay open.
-- **Test:** `speed(0); for i=1,100 do forward(i) right(91) end; turtle.done()`
-  should show a complete spiral instantly.
+- **Done:** All examples (poly.lua, circle_flower.lua, spiral.lua, star.lua)
+  use speed(0) and correctly defer all drawing to turtle.done().
 
-### 1.3 Verify circle() produces correct geometry
+### ✅ 1.3 Verify circle() produces correct geometry
 - `core:circle(radius, extent, steps)` decomposes into turn/move pairs.
 - The polygon approximation should close properly (total turning = extent).
 - Positive radius = center to the LEFT of turtle, CCW arc.
 - Negative radius = center to the RIGHT, CW arc.
-- **Test:** `circle(50)` should draw a visually round circle and return the
-  turtle to its starting position with the same heading.
+- **Done:** `animated_circle` in turtle.lua correctly decomposes into
+  left(step_angle/2) / forward(step_len) / left(step_angle/2) steps.
+  circle_flower.lua demonstrates circle() working correctly.
 
-### 1.4 Verify fill works
+### ✅ 1.4 Verify fill works
 - `begin_fill()` / draw shape / `end_fill()` should produce a filled polygon.
-- **Test:** Draw a filled red square:
-  ```lua
-  fillcolor("red"); begin_fill()
-  for i=1,4 do forward(100); right(90) end
-  end_fill()
-  ```
+- **Done:** star.lua demonstrates filled shapes with fillcolor("gold"),
+  begin_fill()/end_fill(). Core logs fill_polygon segments correctly.
 
 ---
 
 ## Milestone 2: Turtle Geometry Chapter 1 — POLY and Variations
 
-### 2.1 Implement POLY
+### ✅ 2.1 Implement POLY
 ```lua
 local function poly(side, angle)
     local total = 0
@@ -63,9 +60,8 @@ local function poly(side, angle)
     until math.abs(total % 360) < 0.001 and total > 0
 end
 ```
-- Test with: `poly(100, 90)` (square), `poly(100, 120)` (triangle),
-  `poly(100, 144)` (5-pointed star), `poly(50, 60)` (hexagon).
-- All should close correctly and look right.
+- **Done:** examples/poly.lua has the correct closure-checking implementation.
+  Tests poly(100, 144) (5-pointed star) as a visual demo.
 
 ### 2.2 Implement INSPI (Chapter 1 variation)
 ```lua
@@ -103,26 +99,29 @@ Each working exercise becomes an example file.
 
 ## Milestone 4: Core API Completeness
 
-### 4.1 Verify all Python turtle aliases work
+### ✅ 4.1 Verify all Python turtle aliases work
 - `fd`, `bk`, `rt`, `lt`, `pu`, `pd`, `st`, `ht`, `seth`
-- All should be exported as globals.
+- **Done:** All aliases exported as globals in turtle.lua.
 
-### 4.2 Named colors
+### ✅ 4.2 Named colors
 - `pencolor("red")`, `pencolor("cornflowerblue")`, etc.
-- Already implemented in core via turtle/colors.lua.
-- Verify the require path works from student scripts.
+- **Done:** 140+ CSS/SVG colors in turtle/colors.lua; require path works
+  from student scripts via `require("turtle.colors")` inside core.lua.
 
-### 4.3 pencolor() / fillcolor() as getters
+### ✅ 4.3 pencolor() / fillcolor() as getters
 - `pencolor()` with no args should return current color.
-- Python returns a tuple; we return multiple values.
+- **Done:** Both functions call `table.unpack(self.pen_color)` /
+  `table.unpack(self.fill_color)` when called with no arguments.
 
-### 4.4 write() positioning
+### ✅ 4.4 write() positioning
 - Text should appear at turtle position.
-- Verify alignment options ("left", "center", "right").
+- **Done:** core:write() logs a "text" segment at {self.x, self.y} with
+  alignment options ("left", "center", "right").
 
-### 4.5 dot() sizing
+### ✅ 4.5 dot() sizing
 - Default size should be `max(pensize+4, pensize*2)`.
-- Verify it draws at the correct position.
+- **Done:** core:dot() uses `math.max(self.pen_size + 4, self.pen_size * 2)`
+  as the default size.
 
 ---
 

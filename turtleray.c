@@ -28,8 +28,17 @@
 #include <lauxlib.h>
 #include <lualib.h>
 #include <raylib.h>
+#include <rlgl.h>
 #include <math.h>
 #include <stdlib.h>
+
+/* Supersampling scale for the persistent canvas.
+ * The canvas RenderTexture is created at CANVAS_SCALE x the window size.
+ * All drawing is scaled up by this factor via an rlgl matrix push, then
+ * blitted back to the screen at 1x with bilinear filtering.
+ * This gives effective anti-aliasing since Raylib's MSAA flag only applies
+ * to the main framebuffer, not RenderTexture2D targets. */
+#define CANVAS_SCALE 2
 
 /* ----------------------------------------------------------------
  * Helpers
@@ -119,11 +128,9 @@ static int l_draw_line(lua_State *L) {
     float y2 = (float)luaL_checknumber(L, 4);
     Color c = lua_tocolor(L, 5);
     float thick = (float)luaL_optnumber(L, 9, 2.0);
-    if (thick <= 1.0f) {
-        DrawLine((int)x1, (int)y1, (int)x2, (int)y2, c);
-    } else {
-        DrawLineEx((Vector2){x1, y1}, (Vector2){x2, y2}, thick, c);
-    }
+    /* Always use DrawLineEx: float coordinates avoid integer-snapping jaggies.
+     * The 2x canvas supersampling + bilinear downscale provides anti-aliasing. */
+    DrawLineEx((Vector2){x1, y1}, (Vector2){x2, y2}, thick, c);
     return 0;
 }
 
@@ -133,7 +140,8 @@ static int l_draw_circle(lua_State *L) {
     float cy = (float)luaL_checknumber(L, 2);
     float radius = (float)luaL_checknumber(L, 3);
     Color c = lua_tocolor(L, 4);
-    DrawCircle((int)cx, (int)cy, radius, c);
+    /* DrawCircleV uses float center coords (vs DrawCircle which truncates to int) */
+    DrawCircleV((Vector2){cx, cy}, radius, c);
     return 0;
 }
 
@@ -243,15 +251,20 @@ static int l_measure_text(lua_State *L) {
 
 static RenderTexture2D canvas_rt = {0};
 static int canvas_active = 0;
+static int canvas_logical_w = 0;
+static int canvas_logical_h = 0;
 
-/* create_canvas(width, height) — create an offscreen render texture */
+/* create_canvas(width, height) — create an offscreen render texture at 2x size */
 static int l_create_canvas(lua_State *L) {
     int w = (int)luaL_checkinteger(L, 1);
     int h = (int)luaL_checkinteger(L, 2);
     if (canvas_active) {
         UnloadRenderTexture(canvas_rt);
     }
-    canvas_rt = LoadRenderTexture(w, h);
+    canvas_logical_w = w;
+    canvas_logical_h = h;
+    canvas_rt = LoadRenderTexture(CANVAS_SCALE * w, CANVAS_SCALE * h);
+    SetTextureFilter(canvas_rt.texture, TEXTURE_FILTER_BILINEAR);
     canvas_active = 1;
 
     /* Clear it to transparent */
@@ -262,11 +275,13 @@ static int l_create_canvas(lua_State *L) {
     return 0;
 }
 
-/* begin_canvas() — start drawing to the offscreen canvas */
+/* begin_canvas() — start drawing to the offscreen canvas (with 2x scale matrix) */
 static int l_begin_canvas(lua_State *L) {
     (void)L;
     if (canvas_active) {
         BeginTextureMode(canvas_rt);
+        rlPushMatrix();
+        rlScalef(CANVAS_SCALE, CANVAS_SCALE, 1.0f);
     }
     return 0;
 }
@@ -275,6 +290,7 @@ static int l_begin_canvas(lua_State *L) {
 static int l_end_canvas(lua_State *L) {
     (void)L;
     if (canvas_active) {
+        rlPopMatrix();
         EndTextureMode();
     }
     return 0;
@@ -311,15 +327,18 @@ static int l_clear_canvas(lua_State *L) {
     return 0;
 }
 
-/* resize_canvas(width, height) — recreate canvas if window resized */
+/* resize_canvas(width, height) — recreate canvas if logical size changed */
 static int l_resize_canvas(lua_State *L) {
     int w = (int)luaL_checkinteger(L, 1);
     int h = (int)luaL_checkinteger(L, 2);
     if (canvas_active) {
-        /* Only resize if dimensions actually changed */
-        if (canvas_rt.texture.width != w || canvas_rt.texture.height != h) {
+        /* Compare against logical dimensions, not the 2x texture dimensions */
+        if (canvas_logical_w != w || canvas_logical_h != h) {
             UnloadRenderTexture(canvas_rt);
-            canvas_rt = LoadRenderTexture(w, h);
+            canvas_logical_w = w;
+            canvas_logical_h = h;
+            canvas_rt = LoadRenderTexture(CANVAS_SCALE * w, CANVAS_SCALE * h);
+            SetTextureFilter(canvas_rt.texture, TEXTURE_FILTER_BILINEAR);
             /* Clear new canvas */
             BeginTextureMode(canvas_rt);
             ClearBackground((Color){0, 0, 0, 0});
