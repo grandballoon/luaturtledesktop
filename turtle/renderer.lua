@@ -149,6 +149,15 @@ function Renderer:_draw_turtle_shape(tx, ty, heading, pen_color, fill_color, siz
         local r, g, b, a = self:color255(fill_color)
         ray.draw_triangle_fill(sx1, sy1, sx2, sy2, sx3, sy3, r, g, b, a)
     end
+
+    -- Outline
+    if pen_color then
+        local r, g, b, a = self:color255(pen_color)
+        local lw = size or 2
+        ray.draw_line(sx1, sy1, sx2, sy2, r, g, b, a, lw)
+        ray.draw_line(sx2, sy2, sx3, sy3, r, g, b, a, lw)
+        ray.draw_line(sx3, sy3, sx1, sy1, r, g, b, a, lw)
+    end
 end
 
 ----------------------------------------------------------------
@@ -176,8 +185,12 @@ function Renderer:_render_frame()
 
         ray.begin_canvas()
         local visible = self.core:visible_segments()
+        -- Draw fill polygons first so they always appear behind lines/dots/text.
         for _, seg in ipairs(visible) do
-            self:_draw_segment(seg)
+            if seg.type == "fill" then self:_draw_segment(seg) end
+        end
+        for _, seg in ipairs(visible) do
+            if seg.type ~= "fill" then self:_draw_segment(seg) end
         end
         ray.end_canvas()
 
@@ -218,7 +231,7 @@ function Renderer:_render_frame()
         self:_draw_turtle_shape(
             self.core.x, self.core.y, self.core.angle,
             self.core.pen_color,
-            {0.3, 0.8, 0.3, 0.8}  -- green-ish fill
+            self.core.fill_color
         )
     end
 
@@ -232,6 +245,10 @@ end
 function Renderer:render()
     if not self:ensure_init() then return end
     self:_render_frame()
+    if ray.window_should_close() then
+        ray.close_window()
+        os.exit(0)
+    end
 end
 
 function Renderer:request_full_redraw()
@@ -247,8 +264,8 @@ function Renderer:frame_delay()
     if not self.core then return 0 end
     local s = self.core.speed_setting
     if s == 0 then return 0 end
-    -- Exponential scale: speed 1 ~90ms/step, speed 10 ~2ms/step (~45x range)
-    return 0.09 * (0.65 ^ (s - 1))
+    -- Exponential scale: speed 1 ~23ms/step, speed 10 ~0.5ms/step (~45x range)
+    return 0.023 * (0.65 ^ (s - 1))
 end
 
 -- Keep the window open until user closes it

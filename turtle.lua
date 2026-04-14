@@ -11,15 +11,47 @@ local Renderer = require("turtle.renderer")
 
 local turtle = {}
 
+-- Derive window title from the running script name (arg[0])
+local function script_title()
+    local path = arg and arg[0]
+    if not path then return "Lua Turtle" end
+    local name = path:match("([^/\\]+)$") or path   -- strip directories
+    return (name:match("^(.+)%.[^.]+$") or name)    -- strip extension
+end
+
 -- Create default core and renderer
 local core = Core.new()
-local renderer = Renderer.new()
+local renderer = Renderer.new({ title = script_title() })
 renderer.core = core
 core.renderer = renderer
 
 -- Expose for advanced users
 turtle._core = core
 turtle._renderer = renderer
+
+-- Graceful error recovery ------------------------------------------------
+-- The standard Lua interpreter always calls lua_close after a script ends
+-- (whether normally or via error), which runs __gc finalizers.  This sentinel
+-- keeps the window open if the script exits without calling done(), so the
+-- student can see what was drawn before the error.
+--
+-- Storing renderer inside the table (not just as a closure upvalue) ensures
+-- it is kept alive until the finalizer fires.
+local _mainloop_entered = false
+-- Anchored to turtle._exit_sentinel so it stays alive (via package.loaded)
+-- for the entire program lifetime.  __gc fires during lua_close, which the
+-- standard Lua interpreter always calls after a script ends or errors.
+turtle._exit_sentinel = setmetatable({ renderer = renderer }, {
+    __gc = function(self)
+        if self.renderer.initialized and not _mainloop_entered then
+            io.stderr:write(
+                "\n[turtle] script ended before done() — "
+                .. "window is open, press ESC or close to exit.\n"
+            )
+            self.renderer:mainloop()
+        end
+    end
+})
 
 ----------------------------------------------------------------
 -- Animated movement
@@ -28,6 +60,8 @@ turtle._renderer = renderer
 
 local function animated_forward(distance)
     distance = distance or 0
+    core:_push_undo()
+
     if distance == 0 then
         core:forward(0)
         return
@@ -57,6 +91,7 @@ end
 
 local function animated_right(angle)
     angle = angle or 0
+    core:_push_undo()
     if angle == 0 or core.speed_setting == 0 then
         core:right(angle)
         if core.speed_setting ~= 0 then renderer:render() end
@@ -82,6 +117,7 @@ end
 local function animated_circle(radius, extent, steps)
     radius = radius or 0
     extent = extent or 360
+    core:_push_undo()
     if radius == 0 then return end
 
     local RAD = math.pi / 180
@@ -116,6 +152,7 @@ end
 
 local function draw_cmd(method_name)
     return function(...)
+        core:_push_undo()
         local result = {core[method_name](core, ...)}
         if core.speed_setting ~= 0 then
             renderer:render()
@@ -143,12 +180,14 @@ local function do_reset()
 end
 
 local function do_clearstamp(id)
+    core:_push_undo()
     core:clearstamp(id)
     renderer:request_full_redraw()
     renderer:render()
 end
 
 local function do_clearstamps(n)
+    core:_push_undo()
     core:clearstamps(n)
     renderer:request_full_redraw()
     renderer:render()
@@ -156,6 +195,7 @@ end
 
 local function do_bgcolor(r, g, b, a)
     if r == nil then return core:bgcolor() end
+    core:_push_undo()
     core:bgcolor(r, g, b, a)
     renderer:request_full_redraw()
     renderer:render()
@@ -185,39 +225,56 @@ turtle.sety         = draw_cmd("sety")
 turtle.setheading   = draw_cmd("setheading")
 turtle.seth         = draw_cmd("setheading")
 turtle.home         = draw_cmd("home")
-turtle.teleport     = function(x, y) core:teleport(x, y) end
+turtle.teleport     = function(x, y) core:_push_undo(); core:teleport(x, y) end
 
 -- Pen control
-turtle.penup     = function() core:penup() end
+turtle.penup     = function() core:_push_undo(); core:penup() end
 turtle.pu        = turtle.penup
 turtle.up        = turtle.penup
-turtle.pendown   = function() core:pendown() end
+turtle.pendown   = function() core:_push_undo(); core:pendown() end
 turtle.pd        = turtle.pendown
 turtle.down      = turtle.pendown
-turtle.pensize   = function(w) return core:pensize(w) end
+turtle.pensize   = function(w)
+    if w ~= nil then core:_push_undo() end
+    return core:pensize(w)
+end
 turtle.width     = turtle.pensize
-turtle.pencolor  = function(r, g, b, a) return core:pencolor(r, g, b, a) end
-turtle.fillcolor = function(r, g, b, a) return core:fillcolor(r, g, b, a) end
-turtle.color     = function(pen, fill) return core:color(pen, fill) end
+turtle.pencolor  = function(r, g, b, a)
+    if r ~= nil then core:_push_undo() end
+    return core:pencolor(r, g, b, a)
+end
+turtle.fillcolor = function(r, g, b, a)
+    if r ~= nil then core:_push_undo() end
+    return core:fillcolor(r, g, b, a)
+end
+turtle.color     = function(pen, fill)
+    if pen ~= nil then core:_push_undo() end
+    return core:color(pen, fill)
+end
 
 -- Filling
-turtle.begin_fill = function() core:begin_fill() end
+turtle.begin_fill = function() core:_push_undo(); core:begin_fill() end
 turtle.end_fill   = function()
+    core:_push_undo()
     core:end_fill()
+    renderer:request_full_redraw()
     renderer:render()
 end
 turtle.filling    = function() return core:is_filling() end
 
 -- Drawing extras
 turtle.dot   = function(size, r, g, b, a)
+    core:_push_undo()
     core:dot(size, r, g, b, a)
     renderer:render()
 end
 turtle.write = function(text, move, align, font)
+    core:_push_undo()
     core:write(text, move, align, font)
     renderer:render()
 end
 turtle.stamp       = function()
+    core:_push_undo()
     local id = core:stamp()
     renderer:render()
     return id
@@ -242,9 +299,9 @@ turtle.towards   = function(x, y) return core:towards(x, y) end
 turtle.distance  = function(x, y) return core:distance(x, y) end
 
 -- Visibility
-turtle.showturtle = function() core:showturtle(); renderer:render() end
+turtle.showturtle = function() core:_push_undo(); core:showturtle(); renderer:render() end
 turtle.st         = turtle.showturtle
-turtle.hideturtle = function() core:hideturtle(); renderer:render() end
+turtle.hideturtle = function() core:_push_undo(); core:hideturtle(); renderer:render() end
 turtle.ht         = turtle.hideturtle
 
 -- Speed
@@ -262,9 +319,18 @@ turtle.update = function()
     renderer:render()
 end
 
+-- Undo
+turtle.undo = function()
+    core:undo()
+    renderer:request_full_redraw()
+    renderer:render()
+end
+turtle.setundobuffer   = function(n) core:setundobuffer(n) end
+turtle.undobufferentries = function() return core:undobufferentries() end
+
 -- Event loop
 turtle.done     = function()
-    -- Final render (important for speed(0) batch mode)
+    _mainloop_entered = true
     renderer:request_full_redraw()
     renderer:mainloop()
 end
@@ -280,5 +346,59 @@ for name, fn in pairs(turtle) do
         _G[name] = fn
     end
 end
+
+----------------------------------------------------------------
+-- 9.3: Undefined variable detection
+-- __index on _G fires only when a name is NOT already in the global table,
+-- so standard library globals (math, string, io …) and all exported turtle
+-- functions are found normally.  Only genuine typos hit this handler.
+----------------------------------------------------------------
+
+-- Collect exported API names for "did you mean?" suggestions.
+local _api_names = {}
+for name in pairs(turtle) do
+    if not name:match("^_") then
+        table.insert(_api_names, name)
+    end
+end
+
+-- Edit distance (Levenshtein) — used to find the closest API name.
+local function _editdist(s, t)
+    s, t = s:lower(), t:lower()
+    local m, n = #s, #t
+    if m == 0 then return n end
+    if n == 0 then return m end
+    local prev = {}
+    for j = 0, n do prev[j] = j end
+    for i = 1, m do
+        local curr = { [0] = i }
+        for j = 1, n do
+            local cost = s:sub(i, i) == t:sub(j, j) and 0 or 1
+            curr[j] = math.min(prev[j] + 1, curr[j-1] + 1, prev[j-1] + cost)
+        end
+        prev = curr
+    end
+    return prev[n]
+end
+
+local function _suggest(name)
+    local best, best_d = nil, 3   -- only suggest when edit distance ≤ 2
+    for _, known in ipairs(_api_names) do
+        local d = _editdist(name, known)
+        if d < best_d then best, best_d = known, d end
+    end
+    return best
+end
+
+setmetatable(_G, {
+    __index = function(_, name)
+        local msg = ("'%s' is not defined"):format(name)
+        local suggestion = _suggest(name)
+        if suggestion then
+            msg = msg .. (" — did you mean '%s'?"):format(suggestion)
+        end
+        error(msg, 2)
+    end
+})
 
 return turtle

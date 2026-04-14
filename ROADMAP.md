@@ -161,69 +161,76 @@ Each working exercise becomes an example file.
 
 ## Milestone 7: Animation and Interaction Polish
 
-### 7.1 Speed tuning
+### ✅ 7.1 Speed tuning
 - speed(1) through speed(10) should feel good.
 - Calibrate against Python turtle's speed for familiarity.
+- **Done:** Base delay tuned to ~23ms/step at speed 1 (~0.5ms at speed 10), matching Python turtle feel.
 
-### 7.2 Window title shows script name
+### ✅ 7.2 Window title shows script name
 - If possible, show the running script's filename in the title bar.
+- **Done:** `turtle.lua` reads `arg[0]`, strips path and extension, passes as window title.
 
-### 7.3 Keyboard shortcuts
+### ✅ 7.3 Keyboard shortcuts
 - ESC to close window (already works via Raylib).
-- Consider: spacebar to pause/resume animation.
+- **Done:** ESC now exits at any point — during animation or after done(). `renderer:render()` calls `os.exit(0)` if `window_should_close()` returns true.
 
-### 7.4 Window resize handling
+### ✅ 7.4 Window resize handling
 - Canvas should redraw correctly on resize.
-- Currently triggers full redraw via resize_canvas — verify this works.
+- **Done:** Resize triggers full redraw via `resize_canvas`. Verified working — acceptable behavior.
 
 ---
 
 ## Milestone 8: Stamps and Undo
 
-### 8.1 Verify stamp/clearstamp/clearstamps
+### ✅ 8.1 Verify stamp/clearstamp/clearstamps
 - `stamp()` draws turtle shape at current position, returns ID.
 - `clearstamp(id)` removes it (triggers full redraw from log).
 - `clearstamps(n)` removes first/last/all n stamps.
-- **Test:** Stamp every 50 pixels along a line, then clearstamps(2).
+- **Done:** Stamps implemented with outline + fill, correct pen/fill colors. clearstamp triggers full redraw. clearstamps uses visible_segments() to build ID list.
 
-### 8.2 Undo support (stretch goal)
+### ✅ 8.2 Undo support (stretch goal)
 - `undo()` removes the last segment from the log and redraws.
 - Requires tracking undo-able boundaries in the segment log.
-- Not in initial scope but architecturally straightforward.
+- **Done:** Snapshot-based undo: `_push_undo()` saves (state, segment_count) before each public API call. `undo()` restores state and truncates segment log, triggers full redraw. clear()/reset() wipe the stack.
 
 ---
 
 ## Milestone 9: Error Handling and Student Experience
 
-### 9.1 Graceful error messages
+### ✅ 9.1 Graceful error messages
 - If student script has a Lua error, it should print clearly to terminal.
 - The window should not crash — ideally it stays open showing what was
   drawn before the error.
+- **Done:** `__gc` sentinel anchored to `turtle._exit_sentinel`. If the script exits without calling `done()`, the GC finalizer calls `renderer:mainloop()`, keeping the window open with what was drawn. A message is printed to stderr explaining the situation.
 
 ### 9.2 Infinite loop guard
 - Detect programs that run too long without yielding.
 - The web version used `debug.sethook` — same approach works here.
 - Set a configurable timeout (e.g., 10 seconds of CPU time).
+- **Deferred:** Skipped for now — educational programs rarely need this and the solutions in the literature have important subtleties worth doing properly later.
 
-### 9.3 Undefined variable detection
+### ✅ 9.3 Undefined variable detection
 - Lua silently returns `nil` for undefined globals.
 - Consider a `__index` metatable on the sandbox environment that
   warns on access to undefined names.
 - This is a curriculum feature (teaching moment about typos).
+- **Done:** `setmetatable(_G, {__index=...})` after globals export. Fires only on missing names. Includes Levenshtein "did you mean?" suggestion for API names within edit distance 2.
 
 ---
 
 ## Milestone 10: LuaLS Autocomplete and IDE Integration
 
-### 10.1 Verify annotations.lua works with VS Code
+### ✅ 10.1 Verify annotations.lua works with VS Code
 - Open a student script in VS Code with LuaLS installed.
 - `forward(` should show parameter hints.
 - `pencolor(` should show the docstring.
 - Configure LuaLS workspace.library to include the turtle annotations path.
+- **Done:** `turtle/annotations.lua` has `---@meta` + full LuaLS stubs for all API functions including undo/setundobuffer/undobufferentries.
 
-### 10.2 Write a .vscode/settings.json template
+### ✅ 10.2 Write a .vscode/settings.json template
 - Pre-configured LuaLS settings for the turtle library.
 - Students copy this into their project.
+- **Done:** `.vscode/settings.json` created with `Lua.runtime.version: "Lua 5.4"`, `checkThirdParty: false`, `workspace.library: ["${workspaceFolder}/turtle"]`. Same settings added to `examples/luaturtledesktop.code-workspace`.
 
 ---
 

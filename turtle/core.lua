@@ -36,13 +36,13 @@ function Core.new()
     -- Segment log (append-only)
     self.segments = {}
 
-    -- Line segments deferred during a fill so that end_fill() can log
-    -- the fill polygon first, ensuring it renders behind the outline.
-    self._fill_pending_segs = {}
-
     -- Stamp management
     self._next_stamp_id = 1
     self._cleared_stamps = {}  -- set of stamp IDs that have been cleared
+
+    -- Undo stack: each entry is a state snapshot taken before a command.
+    self._undo_stack = {}
+    self._undo_buffer_size = 1000  -- nil = unlimited
 
     -- Mode: "standard" (0=east, CCW) or "logo" (0=north, CW)
     self.mode = "standard"
@@ -93,12 +93,6 @@ end
 ----------------------------------------------------------------
 
 function Core:_log(entry)
-    -- Defer line segments drawn during a fill so the fill polygon can be
-    -- logged first at end_fill(), keeping it behind the outline in draw order.
-    if self.filling and entry.type == "line" then
-        table.insert(self._fill_pending_segs, entry)
-        return
-    end
     table.insert(self.segments, entry)
     return #self.segments
 end
@@ -317,14 +311,12 @@ end
 function Core:begin_fill()
     self.filling = true
     self.fill_vertices = {{self.x, self.y}}
-    self._fill_pending_segs = {}
 end
 
 function Core:end_fill()
     if not self.filling then return end
-    self.filling = false  -- cleared before _log so deferred check is skipped
+    self.filling = false
 
-    -- Log the fill polygon FIRST so the renderer draws it behind the outline.
     if #self.fill_vertices >= 3 then
         self:_log({
             type = "fill",
@@ -332,12 +324,6 @@ function Core:end_fill()
             color = {table.unpack(self.fill_color)},
         })
     end
-    -- Flush the deferred line segments; they land after fill in the log,
-    -- so the incremental renderer draws them on top of the fill.
-    for _, seg in ipairs(self._fill_pending_segs) do
-        table.insert(self.segments, seg)
-    end
-    self._fill_pending_segs = {}
     self.fill_vertices = {}
 end
 
@@ -414,10 +400,11 @@ function Core:clearstamp(stamp_id)
 end
 
 function Core:clearstamps(n)
-    -- Clear first n stamps (or last n if negative, or all if nil)
+    -- Clear first n stamps (or last n if negative, or all if nil).
+    -- Only considers stamps visible after the last clear().
     local stamp_ids = {}
-    for i, seg in ipairs(self.segments) do
-        if seg.type == "stamp" and not self._cleared_stamps[seg.id] then
+    for _, seg in ipairs(self:visible_segments()) do
+        if seg.type == "stamp" then
             table.insert(stamp_ids, seg.id)
         end
     end
@@ -445,10 +432,10 @@ end
 
 function Core:clear()
     -- Clear drawing, preserve turtle state.
-    -- Also cancels any in-progress fill so pending segments don't leak.
+    -- Also cancels any in-progress fill and wipes the undo stack.
     self.filling = false
-    self._fill_pending_segs = {}
     self.fill_vertices = {}
+    self._undo_stack = {}
     self:_log({ type = "clear" })
 end
 
@@ -463,9 +450,9 @@ function Core:reset()
     self.filling = false
     self.fill_vertices = {}
     self.fill_color = {1, 1, 1, 1}
-    self._fill_pending_segs = {}
     self.visible = true
     self._cleared_stamps = {}
+    self._undo_stack = {}
     self:_log({ type = "clear" })
 end
 
@@ -585,6 +572,78 @@ function Core:visible_segments()
         end
     end
     return results
+end
+
+----------------------------------------------------------------
+-- Undo
+----------------------------------------------------------------
+
+function Core:_push_undo()
+    -- Snapshot all state needed to reverse the next command.
+    local cleared_copy = {}
+    for k, v in pairs(self._cleared_stamps) do cleared_copy[k] = v end
+
+    local snap = {
+        seg_count         = #self.segments,
+        fill_vertex_count = #self.fill_vertices,
+        x                 = self.x,
+        y                 = self.y,
+        angle             = self.angle,
+        pen_down          = self.pen_down,
+        pen_color         = {table.unpack(self.pen_color)},
+        pen_size          = self.pen_size,
+        fill_color        = {table.unpack(self.fill_color)},
+        filling           = self.filling,
+        visible           = self.visible,
+        bg_color          = {table.unpack(self.bg_color)},
+        cleared_stamps    = cleared_copy,
+        next_stamp_id     = self._next_stamp_id,
+    }
+    table.insert(self._undo_stack, snap)
+    -- Trim oldest entries when buffer is full
+    if self._undo_buffer_size and #self._undo_stack > self._undo_buffer_size then
+        table.remove(self._undo_stack, 1)
+    end
+end
+
+function Core:undo()
+    if #self._undo_stack == 0 then return end
+    local snap = table.remove(self._undo_stack)
+
+    -- Truncate segment log
+    while #self.segments > snap.seg_count do
+        table.remove(self.segments)
+    end
+    -- Truncate fill vertices
+    while #self.fill_vertices > snap.fill_vertex_count do
+        table.remove(self.fill_vertices)
+    end
+    -- Restore turtle state
+    self.x               = snap.x
+    self.y               = snap.y
+    self.angle           = snap.angle
+    self.pen_down        = snap.pen_down
+    self.pen_color       = snap.pen_color
+    self.pen_size        = snap.pen_size
+    self.fill_color      = snap.fill_color
+    self.filling         = snap.filling
+    self.visible         = snap.visible
+    self.bg_color        = snap.bg_color
+    self._cleared_stamps = snap.cleared_stamps
+    self._next_stamp_id  = snap.next_stamp_id
+end
+
+function Core:setundobuffer(size)
+    self._undo_buffer_size = size  -- nil = unlimited
+    if size then
+        while #self._undo_stack > size do
+            table.remove(self._undo_stack, 1)
+        end
+    end
+end
+
+function Core:undobufferentries()
+    return #self._undo_stack
 end
 
 return Core

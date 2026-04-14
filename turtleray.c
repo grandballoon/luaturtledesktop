@@ -217,6 +217,22 @@ static int l_draw_polygon_fill(lua_State *L) {
         lua_pop(L, 2);                  /* pop y and the sub-table */
     }
 
+    /* Compute signed area via shoelace formula.
+     * In screen space (y-down): area > 0 means CW, area < 0 means CCW.
+     * Raylib's DrawTriangle requires CCW, so reverse vertices if CW. */
+    float area = 0.0f;
+    for (int i = 0, j = n - 1; i < n; j = i++) {
+        area += pts[j].x * pts[i].y;
+        area -= pts[i].x * pts[j].y;
+    }
+    if (area >= 0.0f) {
+        for (int lo = 0, hi = n - 1; lo < hi; lo++, hi--) {
+            Vector2 tmp = pts[lo];
+            pts[lo] = pts[hi];
+            pts[hi] = tmp;
+        }
+    }
+
     /* Triangle fan decomposition */
     for (int i = 1; i < n - 1; i++) {
         DrawTriangle(pts[0], pts[i], pts[i + 1], c);

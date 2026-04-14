@@ -127,14 +127,16 @@ test("end_fill with < 3 vertices creates no fill", function()
     assert(h.count_segments(t, "fill") == 0)
 end)
 
-test("fill segment precedes its outline lines in segment log", function()
+test("fill segment logged after its outline lines in segment log", function()
     local t = Core.new()
     t:begin_fill()
     for i = 1, 4 do t:forward(100); t:right(90) end
     t:end_fill()
-    -- fill must come first so renderer draws it behind the outline
-    assert(t.segments[1].type == "fill", "fill should be first segment")
-    assert(t.segments[2].type == "line", "lines should follow fill")
+    -- lines are logged as drawn; fill is appended at end_fill()
+    -- renderer's full-redraw path draws fills before lines regardless of log order
+    assert(t.segments[1].type == "line", "lines should be logged as drawn")
+    local last = t.segments[#t.segments]
+    assert(last.type == "fill", "fill should be the last logged segment")
 end)
 
 test("color(c) sets both pen and fill", function()
