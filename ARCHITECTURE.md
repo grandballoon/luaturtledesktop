@@ -1,4 +1,4 @@
-# Architecture
+# ARCHITECTURE.md
 
 ## Overview
 
@@ -7,180 +7,176 @@ The student's script is the main program. It runs top-to-bottom. Drawing
 commands open a window (lazily, on first draw call), draw immediately, and
 return. The window stays open after the script ends.
 
-This is the desktop counterpart to the browser-based Lua Turtle (luaturtleweb).
-The two implementations share API surface and coordinate conventions but have
-independent codebases — the browser version uses an action queue and
-requestAnimationFrame; this version executes synchronously.
+This is the desktop counterpart to a future browser-based Lua Turtle.
+The two implementations share core logic (`core.lua`, `screen.lua`,
+`colors.lua`) and the test suite. They have independent execution hosts
+and renderers. The user-facing API and behavior are identical.
 
 ## Technology Stack
 
 - **Language:** Lua 5.4 (PUC-Rio reference implementation)
-- **GUI toolkit:** IUP 3.32+ (Tecgraf/PUC-Rio)
-- **2D graphics:** CD 5.14+ Canvas Draw (Tecgraf/PUC-Rio)
-- **Alpha/AA:** Context Plus drivers (GDI+ on Windows, Cairo on Linux/macOS)
+- **Windowing & events:** SDL2
+- **2D drawing:** Cairo
 - **Editor:** External (VS Code recommended, with LuaLS for autocomplete)
-- **Distribution:** LuaRocks package depending on iuplua and iuplua-cd
+- **Distribution:** Platform-specific binaries bundling Lua + libraries
 
-## Key Decisions
+## Architecture Diagram
 
-### Why IUP+CD (not Raylib, SDL2, LÖVE, etc.)
+```
+┌─────────────────────────────────────────────┐
+│              User's Lua Script              │
+│    forward(100); right(90); forward(100)    │
+└──────────────────┬──────────────────────────┘
+                   │
+┌──────────────────▼──────────────────────────┐
+│           turtle.lua (execution host)        │
+│  Animation timing, undo snapshots, speed,    │
+│  animated undo, globals export, REPL glue    │
+└───────┬──────────────────────────┬──────────┘
+        │                          │
+┌───────▼────────┐    ┌────────────▼───────────┐
+│   core.lua     │    │     screen.lua          │
+│  (per-turtle)  │───▶│  (shared state)         │
+│  Position,     │    │  Segment log,           │
+│  heading, pen, │    │  bg_color,              │
+│  fill, undo    │    │  turtle registry,       │
+│                │    │  visible_segments()     │
+└────────────────┘    └────────────┬───────────┘
+                                   │
+                      ┌────────────▼───────────┐
+                      │   renderer.lua          │
+                      │   Reads segment log,    │
+                      │   calls turtlecairo.c   │
+                      └────────────┬───────────┘
+                                   │
+                      ┌────────────▼───────────┐
+                      │    turtlecairo.c        │
+                      │  SDL2: window, events   │
+                      │  Cairo: lines, fills,   │
+                      │  circles, text, alpha   │
+                      └────────────────────────┘
+```
 
-IUP and CD are made by the same institution that created Lua (Tecgraf/PUC-Rio).
-Lua bindings are first-class, not afterthoughts. CD provides professional 2D
-vector graphics (anti-aliased lines, native arcs, filled polygons, text, alpha
-via context plus drivers). IUP provides cross-platform windowing with native
-controls.
+## Key Decisions and Rationale
 
-Raylib was considered but has no production-quality Lua 5.4 binding on LuaRocks.
-SDL2's Lua binding is stale. LÖVE requires a framework-owns-the-main-loop
-architecture incompatible with the "write a script, hit run" UX.
+### Why Cairo + SDL2 (not Raylib, not IUP+CD, not platform-native)
 
-### Why synchronous (not queued)
+**Raylib** was the original renderer. It works well for script mode but has
+a fundamental limitation: no non-blocking event processing. The only way to
+pump OS events is through `BeginDrawing/EndDrawing`. This makes REPL mode
+impossible — the window freezes while Lua waits for terminal input.
+
+**IUP+CD** (Tecgraf/PUC-Rio) was considered for its Lua heritage. CD provides
+excellent 2D graphics with alpha (via Context Plus drivers). However, IUP+CD
+has limited availability on modern package managers and a less active
+maintenance community than SDL2 or Cairo.
+
+**Platform-native** (CoreGraphics + Direct2D + Cairo/X11) gives the best
+rendering quality per-platform but triples the windowing code. For a
+one-person project, three windowing backends is too much maintenance surface.
+
+**Cairo + SDL2** was chosen because:
+- Cairo provides native anti-aliased thick lines, alpha compositing, filled
+  polygons, and text — the exact drawing primitives turtle needs, without
+  supersampling hacks or SDL2_gfx.
+- SDL2 provides cross-platform windowing with `SDL_PollEvent` for REPL mode.
+- The pairing mirrors the web architecture (Browser + Canvas2D), creating
+  a clean conceptual symmetry between desktop and web.
+- Both libraries are well-packaged on all three target platforms (Homebrew,
+  apt, vcpkg).
+
+### Why synchronous execution (not queued)
 
 On desktop, the student's script IS the main thread. `forward(100)` can
-directly: update state, draw to the CD canvas, flush the display, sleep for
-animation, and return. No action queue, no dissolution pattern, no coroutines
-needed for basic use.
+directly: update state, draw to the Cairo canvas, present via SDL2, sleep
+for animation, and return. No action queue, no coroutines needed for basic use.
 
-The action queue from the web version existed to work around the browser's
-requestAnimationFrame constraint. That constraint doesn't exist here.
+The web version will achieve the same synchronous user experience using
+the WebTigerPython approach: Lua runs in a Web Worker, turtle commands
+block the worker via `Atomics.wait`, the main thread animates and notifies.
+The core code is identical — only the "how do we pause between animation
+steps" differs (sleep on desktop, `Atomics.wait` on web).
 
-### Why track Python turtle's API
+### Why a shared segment log with turtle IDs (not per-turtle logs)
 
-The Python turtle API is battle-tested by millions of students. Tracking it
-for the core ~30 commands gives free mental-model transfer for students and
-teachers moving between Python and Lua. We diverge freely on:
-- Object model (Lua idioms, not Python classes)
-- Window management (no Tkinter ceremony)
-- Event system (IUP callbacks, not Tkinter)
+Multiple turtles share one append-only segment log. Each entry carries a
+`turtle_id`. This design was chosen because:
+- `visible_segments()` can return all segments in draw order for the renderer.
+- Per-turtle `clear()` works by logging a `{type="clear", turtle_id=N}` and
+  filtering in `visible_segments()`.
+- Undo works by marking segment indices as hidden, not by truncating the log.
+- The renderer replays one log, drawing everything in the order it was created.
+  This naturally handles z-ordering (later segments draw on top).
 
-Warts are kept where the cost of divergence exceeds the cost of the wart
-(e.g., `speed(0)` = fastest is confusing but widely known).
+### Why per-turtle undo uses index marking (not log truncation)
+
+With a shared log, truncating on undo would remove other turtles' segments
+that were appended after the undone command. Instead, each turtle's undo
+stack records which segment indices it added. Undo marks those indices as
+hidden. `visible_segments()` filters them, same as it filters cleared stamps.
+This correctly handles interleaved multi-turtle commands.
+
+### Why bgcolor belongs to Screen, not Turtle
+
+Python turtle places `bgcolor()` on the Screen object, not on any individual
+turtle. This is correct — background color is a property of the canvas, not
+of any turtle's pen state. In the API, `bgcolor()` is a module-level function
+that routes to the Screen.
 
 ## Execution Model
 
 ### Script mode (primary)
 
 ```
-lua myscript.lua
+luaturtle myscript.lua
 ```
 
-The turtle module initializes lazily. First drawing command creates the IUP
-dialog + CD canvas. Subsequent commands draw incrementally. When the script
-ends, `turtle.done()` (or an atexit hook) enters `IupMainLoop()` to keep the
-window open until the user closes it.
+The turtle module initializes lazily. First drawing command creates the SDL2
+window + Cairo canvas. Subsequent commands draw incrementally. When the script
+ends, `turtle.done()` enters `SDL_PollEvent` loop to keep the window open.
 
 ### REPL mode
 
 ```
-lua -i -e 'require("turtle")'
+luaturtle -i -e 'require("turtle")'
 ```
 
-The IUP window persists between inputs. `IupLoopStep()` is called between
-REPL inputs to keep the window responsive. The CD canvas retains all drawing
-between commands.
+Uses a custom Lua interpreter (`luaturtle`) that pumps SDL2 events while
+waiting for terminal input. Each line executes synchronously, renders, and
+returns to the prompt. The window stays responsive between inputs.
 
 ### Animated mode
 
 For `speed(n)` where n > 0, drawing commands break movement into small steps:
 - Move a small increment
-- Draw the line segment to the CD canvas
-- Flush the double buffer
-- Sleep briefly (or call `IupLoopStep()` + busy-wait)
+- Draw the line segment to the Cairo canvas
+- Present via SDL2
+- Sleep briefly
 - Repeat
 
 For `speed(0)`, commands execute instantly with no animation.
 
-## Module Structure
-
-```
-luaturtledesktop/
-├── README.md
-├── ARCHITECTURE.md          # this file
-├── turtle.lua               # user-facing API module
-├── turtle/
-│   ├── core.lua             # state machine, segment log, stamp registry
-│   ├── renderer.lua         # IUP+CD rendering backend
-│   ├── colors.lua           # named color table
-│   └── annotations.lua      # LuaLS type stubs for IDE autocomplete
-├── tests/
-│   ├── run_tests.sh
-│   ├── test_helpers.lua
-│   ├── test_position.lua
-│   ├── test_pen.lua
-│   ├── test_segments.lua
-│   ├── test_circle_arc.lua
-│   ├── test_fill.lua
-│   ├── test_stamps.lua
-│   └── test_programs.lua
-├── examples/
-│   ├── square.lua
-│   ├── star.lua
-│   ├── spiral.lua
-│   ├── circle_flower.lua
-│   └── poly.lua             # Turtle Geometry Chapter 1 exercises
-└── luaturtle-scm-1.rockspec
-```
-
-### turtle.lua (entry point)
-
-The module returned by `require("turtle")`. On load, it:
-1. Requires turtle.core and turtle.renderer
-2. Exposes all API functions as module fields AND as globals
-   (so both `turtle.forward(100)` and `forward(100)` work)
-3. Defers window creation until first drawing command
-
-### turtle/core.lua
-
-Pure Lua, no dependencies. Owns:
-- Position (x, y) in turtle-space
-- Heading (angle in degrees, 0=east, CCW positive)
-- Pen state (down, color with alpha, size)
-- Fill state (recording vertices between begin_fill/end_fill)
-- Segment log (append-only list of {type, data} records)
-- Stamp registry (segment log entries tagged with stamp IDs)
-- Background color
-
-Does NOT own rendering. Calls renderer methods to draw.
-
-### turtle/renderer.lua
-
-IUP+CD backend. Owns:
-- IUP dialog and canvas widget
-- CD canvas (double-buffered, context plus enabled)
-- Coordinate transform (turtle-space to screen-space)
-- Drawing primitives (line, arc, polygon, text)
-- Animation timing (sleep/flush between incremental steps)
-- Event loop management (IupMainLoop, IupLoopStep)
-- Full redraw from segment log (for clearstamp, window resize)
-
-### turtle/colors.lua
-
-Named color lookup table. Maps "red" → {1, 0, 0, 1}, etc.
-Includes all 140 CSS/SVG named colors (same set Python turtle uses via Tk).
-
-### turtle/annotations.lua
-
-LuaLS (sumneko) type annotation file. Provides autocomplete and hover docs
-in VS Code without any extension. Not loaded at runtime.
+Multi-turtle animation is sequential per-command (t1's forward completes,
+then t2's forward starts). For simultaneous movement, use `tracer(0)` +
+manual `screen.update()` calls in a loop — same pattern as Python turtle.
 
 ## Segment Log
 
 The segment log is an append-only list of drawing records:
 
 ```lua
-{ type = "line",    from = {x,y}, to = {x,y}, color = {r,g,b,a}, width = n }
-{ type = "arc",     center = {x,y}, radius = n, start_angle = a, extent = a, color = ..., width = ... }
-{ type = "fill",    vertices = {{x,y}, ...}, color = {r,g,b,a} }
-{ type = "stamp",   id = n, shape_vertices = {{x,y}, ...}, color = ..., fill_color = ... }
-{ type = "dot",     pos = {x,y}, size = n, color = {r,g,b,a} }
-{ type = "text",    pos = {x,y}, content = "...", font = ..., color = ... }
-{ type = "clear",   turtle_id = n }  -- marks a clear boundary
+{ type = "line",  turtle_id = 1, from = {x,y}, to = {x,y}, color = {r,g,b,a}, width = n }
+{ type = "arc",   turtle_id = 1, center = {x,y}, radius = n, start_angle = a, extent = a, ... }
+{ type = "fill",  turtle_id = 1, vertices = {{x,y}, ...}, color = {r,g,b,a} }
+{ type = "stamp", turtle_id = 1, id = n, pos = {x,y}, heading = a, ... }
+{ type = "dot",   turtle_id = 1, pos = {x,y}, size = n, color = {r,g,b,a} }
+{ type = "text",  turtle_id = 1, pos = {x,y}, content = "...", font = ..., color = ... }
+{ type = "clear", turtle_id = 1 }
 ```
 
 The renderer maintains a "committed up to" index. On each draw command, it
-renders only new entries. On clearstamp or window resize, it replays the
-entire log (skipping cleared stamps) to reconstruct the canvas.
+renders only new entries. On clear/clearstamp/undo/resize, it replays the
+entire visible log to reconstruct the canvas.
 
 ## Coordinate System
 
@@ -188,56 +184,27 @@ entire log (skipping cleared stamps) to reconstruct the canvas.
 - 0° = east, 90° = north, counter-clockwise positive
 - Renderer transforms to screen-space: top-left origin, y-down
 - Transform: screen_x = center_x + turtle_x, screen_y = center_y - turtle_y
-- CD's default coordinate system is bottom-left y-up, so the transform is
-  actually just a translation to center the origin (CD handles the y-flip)
 
-## Animation and Timing
+## Web Port Architecture (Future)
 
-Animation speed follows Python turtle's convention:
-- speed(0) = instant (no animation)
-- speed(1) = slowest
-- speed(10) = fastest
-- Default: speed(5) — deliberately not specified yet, will tune during testing
+When porting to the web, the approach follows WebTigerPython's solution:
 
-Between animation steps, the renderer calls `IupLoopStep()` to keep the
-window responsive (prevents "not responding" on the OS level) and uses
-`os.clock()` busy-wait or `IupFlush()` + sleep for frame pacing.
+- Lua runs in a Web Worker via Wasmoon (Lua 5.4 compiled to WASM)
+- Canvas2D renders on the main thread
+- Communication via `postMessage` + `SharedArrayBuffer` + `Atomics.wait`
+- `core.lua`, `screen.lua`, `colors.lua` are shared verbatim
+- Execution host and renderer are web-specific
 
-## Alpha Transparency
-
-CD supports alpha via Context Plus drivers:
-- Windows: GDI+ (`cdUseContextPlus(1)`)
-- Linux: Cairo context plus
-- macOS: Cairo context plus
-
-The renderer enables context plus at canvas creation time. Colors throughout
-the system carry 4 components (r, g, b, a). The API accepts both:
-- `pencolor(r, g, b)` — alpha defaults to 1 (opaque)
-- `pencolor(r, g, b, a)` — explicit alpha
-
-Channel values auto-detected: all <= 1 → 0-1 range; any > 1 → 0-255 range.
+The desktop and web versions will be separate repos with shared core logic.
+Good documentation and testing are the bridge, not shared code in the
+execution host or renderer layers.
 
 ## Testing
 
-Core tests use plain Lua 5.4 assertions against a renderer stub (same
-pattern as the web version). No IUP/CD dependency for core tests.
+Core tests use plain Lua 5.4 assertions against screen/core with no
+renderer dependency. No Cairo/SDL2 needed for core tests.
 
-Renderer tests require IUP+CD installed and are run separately.
+Multi-turtle tests verify behavior against Python turtle's actual behavior,
+validated via test scripts run against CPython.
 
-Integration tests run complete programs (Turtle Geometry exercises, Python
-turtle examples) and verify they execute without error.
-
-## Future: Web Port
-
-When porting back to the web, the approach will follow WebTigerPython's
-solution to the rAF problem. The desktop and web versions will be separate
-repos with shared API surface and coordinate conventions. Good documentation
-and testing are the bridge, not shared code.
-
-Free wins for the web port:
-- Segment log format is renderer-agnostic
-- API surface is identical
-- Coordinate conventions are identical
-- Named color table is pure Lua, shared directly
-- LuaLS annotations are shared directly
-- Test suite (core tests) is shared directly
+Visual tests (examples/) require the window and are verified visually.
