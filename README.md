@@ -25,13 +25,15 @@ done()
 ```sh
 brew install lua sdl2 cairo readline
 luarocks install luaturtle \
-    READLINE_INCDIR=/opt/homebrew/opt/readline/include \
-    READLINE_LIBDIR=/opt/homebrew/opt/readline/lib
+    SDL2_DIR=$(brew --prefix sdl2) \
+    CAIRO_DIR=$(brew --prefix cairo) \
+    READLINE_DIR=$(brew --prefix readline)
 ```
 
-> **Why the readline hints?** Homebrew installs readline as keg-only (not
-> linked into `/opt/homebrew`) to avoid shadowing macOS's built-in libedit.
-> LuaRocks can't find it automatically; the explicit paths fix that.
+> **Why the path hints?** Homebrew installs readline, SDL2, and Cairo into
+> versioned Cellar paths that LuaRocks can't find automatically. The
+> `$(brew --prefix ...)` form resolves the correct path for whatever version
+> you have installed.
 
 ### Linux
 

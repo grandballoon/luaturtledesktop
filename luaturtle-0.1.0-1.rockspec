@@ -54,7 +54,7 @@ external_dependencies = {
         header  = "SDL2/SDL.h",
     },
     CAIRO = {
-        header  = "cairo.h",
+        header  = "cairo/cairo.h",
     },
     READLINE = {
         header  = "readline/readline.h",

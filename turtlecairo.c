@@ -37,7 +37,7 @@
 #include <lauxlib.h>
 #include <lualib.h>
 #include <SDL2/SDL.h>
-#include <cairo.h>
+#include <cairo/cairo.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
