@@ -1,9 +1,9 @@
 -- turtle/renderer.lua
--- Raylib rendering backend for turtle graphics.
--- Owns: window, render texture (persistent canvas), coordinate transform,
+-- Cairo + SDL2 rendering backend for turtle graphics.
+-- Owns: window, persistent canvas surface, coordinate transform,
 -- drawing primitives, animation timing, full redraw from segment log.
 
-local ray = require("turtleray")
+local cairo = require("turtlecairo")
 
 local Renderer = {}
 Renderer.__index = Renderer
@@ -12,14 +12,16 @@ function Renderer.new(opts)
     opts = opts or {}
     local self = setmetatable({}, Renderer)
 
-    self.width = opts.width or 800
+    self.width  = opts.width  or 800
     self.height = opts.height or 600
-    self.title = opts.title or "Lua Turtle"
+    self.title  = opts.title  or "Lua Turtle"
 
     self.initialized = false
 
-    -- Reference to the core (set by turtle.lua)
-    self.core = nil
+    -- screen owns the segment log and bg_color; set by turtle.lua via opts.
+    self.screen = opts.screen or nil
+    -- core is the default turtle; set by turtle.lua.
+    self.core   = nil
 
     -- Track what we've drawn to the persistent canvas
     self.committed_up_to = 0
@@ -35,13 +37,8 @@ end
 function Renderer:ensure_init()
     if self.initialized then return true end
 
-    ray.init_window(self.width, self.height, self.title)
-    -- Disable fps cap during script execution; animated steps control timing
-    -- via explicit sleep() calls. Re-enabled in mainloop() for the idle loop.
-    ray.set_target_fps(0)
-
-    -- Create offscreen render texture for persistent drawing
-    ray.create_canvas(self.width, self.height)
+    cairo.init_window(self.width, self.height, self.title)
+    cairo.create_canvas(self.width, self.height)
 
     self.initialized = true
     return true
@@ -53,8 +50,8 @@ end
 
 -- Turtle-space (center origin, y-up) → screen-space (top-left origin, y-down)
 function Renderer:turtle_to_screen(tx, ty)
-    local w = ray.get_screen_width()
-    local h = ray.get_screen_height()
+    local w = cairo.get_screen_width()
+    local h = cairo.get_screen_height()
     local sx = w / 2 + tx
     local sy = h / 2 - ty   -- flip y
     return sx, sy
@@ -82,7 +79,7 @@ function Renderer:_draw_segment(seg)
         local x1, y1 = self:turtle_to_screen(seg.from[1], seg.from[2])
         local x2, y2 = self:turtle_to_screen(seg.to[1], seg.to[2])
         local r, g, b, a = self:color255(seg.color)
-        ray.draw_line(x1, y1, x2, y2, r, g, b, a, seg.width or 2)
+        cairo.draw_line(x1, y1, x2, y2, r, g, b, a, seg.width or 2)
 
     elseif seg.type == "fill" then
         -- Convert vertices to screen coords
@@ -92,12 +89,12 @@ function Renderer:_draw_segment(seg)
             table.insert(screen_verts, {sx, sy})
         end
         local r, g, b, a = self:color255(seg.color)
-        ray.draw_polygon_fill(screen_verts, r, g, b, a)
+        cairo.draw_polygon_fill(screen_verts, r, g, b, a)
 
     elseif seg.type == "dot" then
         local x, y = self:turtle_to_screen(seg.pos[1], seg.pos[2])
         local r, g, b, a = self:color255(seg.color)
-        ray.draw_circle(x, y, seg.size / 2, r, g, b, a)
+        cairo.draw_circle(x, y, seg.size / 2, r, g, b, a)
 
     elseif seg.type == "text" then
         local x, y = self:turtle_to_screen(seg.pos[1], seg.pos[2])
@@ -106,8 +103,8 @@ function Renderer:_draw_segment(seg)
         if seg.font and seg.font[2] then
             size = seg.font[2]
         end
-        -- Adjust y for text (raylib draws from top-left of text)
-        ray.draw_text(seg.content, x, y - size, size, r, g, b, a)
+        -- cairo.draw_text positions text with its visual top at y
+        cairo.draw_text(seg.content, x, y, size, r, g, b, a)
 
     elseif seg.type == "stamp" then
         self:_draw_turtle_shape(
@@ -122,8 +119,8 @@ end
 ----------------------------------------------------------------
 
 function Renderer:_draw_turtle_shape(tx, ty, heading, pen_color, fill_color, size)
-    local rad = heading * math.pi / 180
-    local len = (size or 2) * 6
+    local rad    = heading * math.pi / 180
+    local len    = (size or 2) * 6
     local half_w = len * 0.4
 
     local cos_h = math.cos(rad)
@@ -132,31 +129,31 @@ function Renderer:_draw_turtle_shape(tx, ty, heading, pen_color, fill_color, siz
     local sin_p = math.sin(rad + math.pi / 2)
 
     -- Three vertices of the arrow in turtle-space
-    local tip_x = tx + cos_h * len
-    local tip_y = ty + sin_h * len
-    local left_x = tx - cos_h * len * 0.3 + cos_p * half_w
-    local left_y = ty - sin_h * len * 0.3 + sin_p * half_w
+    local tip_x   = tx + cos_h * len
+    local tip_y   = ty + sin_h * len
+    local left_x  = tx - cos_h * len * 0.3 + cos_p * half_w
+    local left_y  = ty - sin_h * len * 0.3 + sin_p * half_w
     local right_x = tx - cos_h * len * 0.3 - cos_p * half_w
     local right_y = ty - sin_h * len * 0.3 - sin_p * half_w
 
     -- Convert to screen coords
-    local sx1, sy1 = self:turtle_to_screen(tip_x, tip_y)
-    local sx2, sy2 = self:turtle_to_screen(left_x, left_y)
+    local sx1, sy1 = self:turtle_to_screen(tip_x,   tip_y)
+    local sx2, sy2 = self:turtle_to_screen(left_x,  left_y)
     local sx3, sy3 = self:turtle_to_screen(right_x, right_y)
 
-    -- Fill
+    -- Fill (polygon)
     if fill_color then
         local r, g, b, a = self:color255(fill_color)
-        ray.draw_triangle_fill(sx1, sy1, sx2, sy2, sx3, sy3, r, g, b, a)
+        cairo.draw_polygon_fill({{sx1,sy1},{sx2,sy2},{sx3,sy3}}, r, g, b, a)
     end
 
-    -- Outline
+    -- Outline (three edges)
     if pen_color then
         local r, g, b, a = self:color255(pen_color)
         local lw = size or 2
-        ray.draw_line(sx1, sy1, sx2, sy2, r, g, b, a, lw)
-        ray.draw_line(sx2, sy2, sx3, sy3, r, g, b, a, lw)
-        ray.draw_line(sx3, sy3, sx1, sy1, r, g, b, a, lw)
+        cairo.draw_line(sx1, sy1, sx2, sy2, r, g, b, a, lw)
+        cairo.draw_line(sx2, sy2, sx3, sy3, r, g, b, a, lw)
+        cairo.draw_line(sx3, sy3, sx1, sy1, r, g, b, a, lw)
     end
 end
 
@@ -165,77 +162,74 @@ end
 ----------------------------------------------------------------
 
 function Renderer:_render_frame()
-    if not self.initialized or not self.core then return end
+    if not self.initialized or not self.core or not self.screen then return end
 
     -- Check for window resize
-    local w = ray.get_screen_width()
-    local h = ray.get_screen_height()
+    local w = cairo.get_screen_width()
+    local h = cairo.get_screen_height()
     if w ~= self.width or h ~= self.height then
-        self.width = w
+        self.width  = w
         self.height = h
-        ray.resize_canvas(w, h)
+        cairo.resize_canvas(w, h)
         self.needs_full_redraw = true
     end
+
+    local screen = self.screen
 
     -- Update the persistent canvas with new segments
     if self.needs_full_redraw then
         -- Clear and replay all visible segments onto the canvas
-        local br, bg, bb, ba = self:color255(self.core.bg_color)
-        ray.clear_canvas(br, bg, bb, ba)
+        local br, bg, bb, ba = self:color255(screen.bg_color)
+        cairo.clear_canvas(br, bg, bb, ba)
 
-        ray.begin_canvas()
-        local visible = self.core:visible_segments()
-        -- Draw fill polygons first so they always appear behind lines/dots/text.
+        cairo.begin_canvas()
+        local visible = screen:visible_segments()
+        -- Draw fill polygons first so they appear behind lines/dots/text.
         for _, seg in ipairs(visible) do
             if seg.type == "fill" then self:_draw_segment(seg) end
         end
         for _, seg in ipairs(visible) do
             if seg.type ~= "fill" then self:_draw_segment(seg) end
         end
-        ray.end_canvas()
+        cairo.end_canvas()
 
-        self.committed_up_to = #self.core.segments
+        self.committed_up_to = #screen.segments
         self.needs_full_redraw = false
 
-    elseif self.committed_up_to < #self.core.segments then
+    elseif self.committed_up_to < #screen.segments then
         -- Incremental: draw only new segments
-        ray.begin_canvas()
-        local segs = self.core.segments
+        cairo.begin_canvas()
+        local segs = screen.segments
         for i = self.committed_up_to + 1, #segs do
             local seg = segs[i]
             if seg.type == "clear" then
                 self.needs_full_redraw = true
-                ray.end_canvas()
+                cairo.end_canvas()
                 self:_render_frame()
                 return
-            elseif seg.type == "stamp" and self.core._cleared_stamps[seg.id] then
-                -- skip
+            elseif seg.type == "stamp" and screen._cleared_stamps[seg.id] then
+                -- skip cleared stamp
             else
                 self:_draw_segment(seg)
             end
         end
-        ray.end_canvas()
-        self.committed_up_to = #self.core.segments
+        cairo.end_canvas()
+        self.committed_up_to = #screen.segments
     end
 
-    -- Now draw a frame: canvas + turtle head overlay
-    ray.begin_drawing()
-    local br, bg, bb, ba = self:color255(self.core.bg_color)
-    ray.clear(br, bg, bb, ba)
+    -- Frame: overlay (turtle heads) on top of canvas
+    cairo.begin_drawing()   -- clears overlay, routes draw calls there
 
-    -- Draw the persistent canvas
-    ray.draw_canvas()
-
-    -- Draw the turtle head (ephemeral — not on the persistent canvas)
-    if self.core.visible then
-        self:_draw_turtle_shape(
-            self.core.x, self.core.y, self.core.angle,
-            self.core.pen_color,
-            self.core.fill_color
-        )
+    -- Draw all visible turtle heads onto the overlay
+    for _, t in ipairs(screen.turtles) do
+        if t.visible then
+            self:_draw_turtle_shape(t.x, t.y, t.angle, t.pen_color, t.fill_color)
+        end
     end
 
-    ray.end_drawing()
+    local br, bg, bb, ba = self:color255(screen.bg_color)
+    cairo.clear(br, bg, bb, ba)   -- store background color for end_drawing
+    cairo.end_drawing()           -- compose canvas + overlay + bg, present
 end
 
 ----------------------------------------------------------------
@@ -245,8 +239,8 @@ end
 function Renderer:render()
     if not self:ensure_init() then return end
     self:_render_frame()
-    if ray.window_should_close() then
-        ray.close_window()
+    if cairo.window_should_close() then
+        cairo.close_window()
         os.exit(0)
     end
 end
@@ -257,7 +251,7 @@ end
 
 function Renderer:sleep(seconds)
     if seconds <= 0 then return end
-    ray.wait(seconds)
+    cairo.wait(seconds)
 end
 
 function Renderer:frame_delay()
@@ -271,17 +265,16 @@ end
 -- Keep the window open until user closes it
 function Renderer:mainloop()
     if not self.initialized then return end
-    ray.set_target_fps(60)  -- Re-enable fps cap for idle loop
     self:_render_frame()
-    while not ray.window_should_close() do
+    while not cairo.window_should_close() do
         self:_render_frame()
     end
-    ray.close_window()
+    cairo.close_window()
 end
 
 function Renderer:close()
     if self.initialized then
-        ray.close_window()
+        cairo.close_window()
         self.initialized = false
     end
 end
