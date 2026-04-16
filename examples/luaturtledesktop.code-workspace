@@ -1,13 +1,7 @@
 {
-	"folders": [
-		{
-			"path": ".."
-		}
-	],
-	"settings": {
-		"Lua.runtime.version": "Lua 5.4",
-		"Lua.workspace.checkThirdParty": false,
-		"Lua.workspace.library": ["types"],
-		"Lua.workspace.ignoreDir": ["turtle"]
-	}
+    "folders": [
+        {
+            "path": ".."
+        }
+    ]
 }

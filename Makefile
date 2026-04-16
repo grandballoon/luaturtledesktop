@@ -1,10 +1,16 @@
 # Makefile for turtlecairo — Cairo + SDL2 binding for Lua turtle graphics
 #
 # Usage:
-#   make            — build turtlecairo.so
+#   make            — build turtlecairo.so and turtle_readline.so
+#   make install    — install to LUA_SHAREDIR / LUA_LIBDIR / BINDIR
 #   make clean      — remove build artifacts
 #   make test       — run core tests (no Cairo/SDL2 needed)
 #   make square     — run the square example
+#
+# Install path overrides (defaults use luarocks-compatible layout):
+#   make install LUA_SHAREDIR=/usr/local/share/lua/5.4 \
+#                LUA_LIBDIR=/usr/local/lib/lua/5.4    \
+#                BINDIR=/usr/local/bin
 
 # Platform detection
 UNAME := $(shell uname -s)
@@ -57,7 +63,12 @@ READLINE_LDFLAGS = -L$(READLINE_LIBDIR) -lreadline
 TARGET          = turtlecairo.$(SHARED_EXT)
 READLINE_TARGET = turtle_readline.$(SHARED_EXT)
 
-.PHONY: all clean test square repl
+# Install paths (override on command line)
+LUA_SHAREDIR ?= $(shell $(LUA) -e "print(package.path:match('([^;]+/lua/$(LUA_VERSION))'))" 2>/dev/null || echo /usr/local/share/lua/$(LUA_VERSION))
+LUA_CDIR     ?= $(shell $(LUA) -e "print(package.cpath:match('([^;]+/lua/$(LUA_VERSION))'))" 2>/dev/null || echo /usr/local/lib/lua/$(LUA_VERSION))
+BINDIR       ?= /usr/local/bin
+
+.PHONY: all clean test square repl install
 
 all: $(TARGET) $(READLINE_TARGET)
 
@@ -80,3 +91,17 @@ square: $(TARGET)
 
 repl: all
 	$(LUA) -e 'require("turtle.repl").start()'
+
+install: all
+	install -d $(LUA_SHAREDIR)/turtle
+	install -m 644 turtle.lua          $(LUA_SHAREDIR)/turtle.lua
+	install -m 644 turtle/core.lua     $(LUA_SHAREDIR)/turtle/core.lua
+	install -m 644 turtle/screen.lua   $(LUA_SHAREDIR)/turtle/screen.lua
+	install -m 644 turtle/colors.lua   $(LUA_SHAREDIR)/turtle/colors.lua
+	install -m 644 turtle/repl.lua     $(LUA_SHAREDIR)/turtle/repl.lua
+	install -m 644 turtle/annotations.lua $(LUA_SHAREDIR)/turtle/annotations.lua
+	install -d $(LUA_CDIR)
+	install -m 755 $(TARGET)          $(LUA_CDIR)/$(TARGET)
+	install -m 755 $(READLINE_TARGET) $(LUA_CDIR)/$(READLINE_TARGET)
+	install -d $(BINDIR)
+	install -m 755 luaturtle          $(BINDIR)/luaturtle

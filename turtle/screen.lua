@@ -84,7 +84,8 @@ function Screen:bgcolor(r, g, b, a)
         local colors = require("turtle.colors")
         local c = colors[r:lower()]
         if c then
-            self.bg_color = {c[1], c[2], c[3], c[4] or 1}
+            local alpha = type(g) == "number" and g or (c[4] or 1)
+            self.bg_color = {c[1], c[2], c[3], alpha}
         end
         return
     end

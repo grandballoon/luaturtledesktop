@@ -273,7 +273,10 @@ function Core:pencolor(r, g, b, a)
     if type(r) == "string" then
         local colors = require("turtle.colors")
         local c = colors[r:lower()]
-        if c then self.pen_color = {c[1], c[2], c[3], c[4] or 1} end
+        if c then
+            local alpha = type(g) == "number" and g or (c[4] or 1)
+            self.pen_color = {c[1], c[2], c[3], alpha}
+        end
         return
     end
     self.pen_color = Core.normalize_color(r, g, b, a)
@@ -284,7 +287,10 @@ function Core:fillcolor(r, g, b, a)
     if type(r) == "string" then
         local colors = require("turtle.colors")
         local c = colors[r:lower()]
-        if c then self.fill_color = {c[1], c[2], c[3], c[4] or 1} end
+        if c then
+            local alpha = type(g) == "number" and g or (c[4] or 1)
+            self.fill_color = {c[1], c[2], c[3], alpha}
+        end
         return
     end
     self.fill_color = Core.normalize_color(r, g, b, a)
@@ -339,7 +345,13 @@ function Core:dot(size, r, g, b, a)
     if r then
         if type(r) == "string" then
             local colors = require("turtle.colors")
-            color = colors[r:lower()] or self.pen_color
+            local c = colors[r:lower()]
+            if c then
+                local alpha = type(g) == "number" and g or (c[4] or 1)
+                color = {c[1], c[2], c[3], alpha}
+            else
+                color = {table.unpack(self.pen_color)}
+            end
         else
             color = Core.normalize_color(r, g, b, a)
         end

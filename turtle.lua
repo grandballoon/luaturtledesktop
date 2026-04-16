@@ -279,12 +279,12 @@ end
 --   { segments, current_state {x,y,angle}, previous_state {x,y,angle} }
 --
 -- Animation rules (speed=0 → instant for all):
---   • All-line segments, heading unchanged → reverse the forward/back path.
---     Works for any step count: we walk the segments in reverse order, each
---     going from its .to back to its .from.  This animates both single-step
---     (speed=0 or large distance) and multi-step (speed>0) forwards correctly.
+--   • All-line segments (forward/back/circle/arc) → erase path in reverse.
+--     Walk segments in reverse order, each going from its .to back to its .from.
+--     A _temp_segs overlay shows the remaining line/arc shrinking each frame.
+--     Works whether or not the heading changes (covers both straight and curved paths).
 --   • No segments, heading changed → reverse the turn.
---   • Anything else (fill, dot, stamp, text, circle, compound) → instant.
+--   • Anything else (fill, dot, stamp, text, compound) → instant.
 local function _undo(c)
     local desc = c:undo()
     if not desc then return end
@@ -300,52 +300,63 @@ local function _undo(c)
         for _, seg in ipairs(segs) do
             if seg.type ~= "line" then all_lines = false; break end
         end
-        -- (curr.angle - prev.angle) mod 360: 0 = no change, nonzero = rotation
-        local angle_diff = (curr.angle - prev.angle) % 360
+        -- heading_unchanged: used only for the pure-turn branch below
+        local angle_diff        = (curr.angle - prev.angle) % 360
         local heading_unchanged = angle_diff < 0.001 or angle_diff > 359.999
 
-        if all_lines and heading_unchanged then
-            -- Place turtle at the "current" end of the path (where it was
-            -- before undo) and step backward through each sub-segment in
-            -- reverse order, ending exactly at prev position.
-            -- The segment is already hidden; we draw a shrinking _temp_line on
-            -- the overlay so the line appears to be erased as the turtle walks back.
+        if all_lines then
+            -- Place turtle at the "current" end of the path and step backward
+            -- through each sub-segment in reverse order (works for straight
+            -- lines and curves: heading_unchanged is not required).
+            -- The segments are already hidden; _temp_segs on the overlay shows
+            -- the remaining arc/line and shrinks as the turtle walks back.
             c.x     = curr.x
             c.y     = curr.y
             c.angle = curr.angle
-            -- Rebuild canvas without the hidden segment, then set up temp line.
+            -- Rebuild canvas without the hidden segments, then build temp segs.
             renderer.needs_full_redraw = true
-            local first_seg = segs[1]
-            renderer._temp_line = {
-                from  = { prev.x, prev.y },
-                to    = { curr.x, curr.y },
-                color = first_seg.color,
-                width = first_seg.width or 2,
-            }
-            local delay     = renderer:frame_delay()
-            local step_size = step_size_for_speed(c.speed_setting)
+            renderer._temp_segs = {}
+            for i, seg in ipairs(segs) do
+                renderer._temp_segs[i] = {
+                    from  = seg.from,
+                    to    = seg.to,
+                    color = seg.color,
+                    width = seg.width or 2,
+                }
+            end
+            local delay         = renderer:frame_delay()
+            local step_size     = step_size_for_speed(c.speed_setting)
+            -- Distribute total heading reversal evenly across segments so the
+            -- turtle's heading tracks the arc (for straight lines the delta is 0).
+            local heading_delta = (prev.angle - curr.angle) / #segs
             for i = #segs, 1, -1 do
-                local seg = segs[i]
+                local seg  = segs[i]
+                local tseg = renderer._temp_segs[i]
                 local dx   = seg.from[1] - seg.to[1]
                 local dy   = seg.from[2] - seg.to[2]
                 local dist = math.sqrt(dx * dx + dy * dy)
                 if dist > 0 then
-                    local steps = math.max(1, math.floor(dist / step_size))
-                    local sx, sy = dx / steps, dy / steps
+                    local steps      = math.max(1, math.floor(dist / step_size))
+                    local sx, sy     = dx / steps, dy / steps
+                    local angle_step = heading_delta / steps
                     for _ = 1, steps do
-                        c.x = c.x + sx
-                        c.y = c.y + sy
-                        renderer._temp_line.to = { c.x, c.y }
+                        c.x     = c.x + sx
+                        c.y     = c.y + sy
+                        c.angle = c.angle + angle_step
+                        tseg.to = { c.x, c.y }   -- shorten this segment on overlay
                         renderer:render()
                         if delay > 0 then renderer:sleep(delay) end
                     end
+                else
+                    c.angle = c.angle + heading_delta
                 end
+                renderer._temp_segs[i] = nil   -- segment fully erased, drop from overlay
             end
             -- Snap to exact restored position (eliminates float drift)
             c.x     = prev.x
             c.y     = prev.y
             c.angle = prev.angle
-            renderer._temp_line = nil
+            renderer._temp_segs = nil
 
         elseif #segs == 0 and not heading_unchanged then
             -- Reverse a turn: animate from current angle back to previous.

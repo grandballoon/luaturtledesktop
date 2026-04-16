@@ -22,7 +22,7 @@ package = "luaturtle"
 version = "0.1.0-1"
 
 source = {
-    url    = "git+https://github.com/OWNER/luaturtle.git",
+    url    = "git+https://github.com/grandballoon/luaturtledesktop",
     tag    = "v0.1.0",
 }
 
@@ -36,7 +36,7 @@ description = {
         Features: multi-turtle, animated undo, REPL mode (readline), full
         Python turtle API compatibility for ~40 commands.
     ]],
-    homepage = "https://github.com/OWNER/luaturtle",
+    homepage = "https://github.com/grandballoon/luaturtledesktop",
     license  = "MIT",
 }
 
@@ -88,6 +88,7 @@ build = {
         ["turtle.colors"]     = "turtle/colors.lua",
         ["turtle.repl"]       = "turtle/repl.lua",
         ["turtle.annotations"] = "turtle/annotations.lua",
+        ["turtle.renderer"]    = "turtle/renderer.lua",
     },
 
     install = {

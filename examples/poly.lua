@@ -12,8 +12,9 @@ function poly(side, angle)
     end
 end
 
+turtle.bgcolor("gold")
+turtle.color("dodgerblue", 0.7)
 speed(3)
-turtle.fd(50)
-turtle.rt(45)
-turtle.fd(50)
+turtle.circle(100)
+print(towards(100, 100))
 undo()

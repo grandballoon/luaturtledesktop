@@ -2,9 +2,8 @@
 
 ## How to Use This Document
 
-This is an ordered task list for Claude Code sessions. Work top-to-bottom.
-Each milestone ends with a concrete test. Reference CLAUDE.md for architecture
-context. When working on Turtle Geometry exercises, the human will paste the
+Works top-to-bottom.
+Each milestone ends with a concrete test. When working on Turtle Geometry exercises, the human will paste the
 specific exercise text.
 
 Milestones marked ✅ are complete. Milestones marked 🔄 are in progress.

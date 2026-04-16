@@ -109,7 +109,7 @@ function Renderer:_draw_segment(seg)
     elseif seg.type == "stamp" then
         self:_draw_turtle_shape(
             seg.pos[1], seg.pos[2], seg.heading,
-            seg.color, seg.fill_color, seg.size
+            seg.color, seg.color, seg.size
         )
     end
 end
@@ -223,17 +223,18 @@ function Renderer:_render_frame()
     -- Draw all visible turtle heads onto the overlay
     for _, t in ipairs(screen.turtles) do
         if t.visible then
-            self:_draw_turtle_shape(t.x, t.y, t.angle, t.pen_color, t.fill_color)
+            self:_draw_turtle_shape(t.x, t.y, t.angle, t.pen_color, t.pen_color)
         end
     end
 
-    -- Draw undo-erase temp line if active (shrinks each frame as turtle walks back)
-    if self._temp_line then
-        local tl = self._temp_line
-        local x1, y1 = self:turtle_to_screen(tl.from[1], tl.from[2])
-        local x2, y2 = self:turtle_to_screen(tl.to[1],   tl.to[2])
-        local r, g, b, a = self:color255(tl.color)
-        cairo.draw_line(x1, y1, x2, y2, r, g, b, a, tl.width or 2)
+    -- Draw undo-erase temp segments if active (remaining arc/line as turtle walks back)
+    if self._temp_segs then
+        for _, tl in ipairs(self._temp_segs) do
+            local x1, y1 = self:turtle_to_screen(tl.from[1], tl.from[2])
+            local x2, y2 = self:turtle_to_screen(tl.to[1],   tl.to[2])
+            local r, g, b, a = self:color255(tl.color)
+            cairo.draw_line(x1, y1, x2, y2, r, g, b, a, tl.width or 2)
+        end
     end
 
     local br, bg, bb, ba = self:color255(screen.bg_color)
