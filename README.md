@@ -23,17 +23,20 @@ done()
 ### macOS
 
 ```sh
-brew install lua sdl2 cairo readline
-luarocks install luaturtle \
-    SDL2_DIR=$(brew --prefix sdl2) \
-    CAIRO_DIR=$(brew --prefix cairo) \
-    READLINE_DIR=$(brew --prefix readline)
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/grandballoon/luaturtledesktop/main/install.sh)"
 ```
 
-> **Why the path hints?** Homebrew installs readline, SDL2, and Cairo into
-> versioned Cellar paths that LuaRocks can't find automatically. The
-> `$(brew --prefix ...)` form resolves the correct path for whatever version
-> you have installed.
+Then reload your shell (`source ~/.zshrc` or open a new terminal).
+
+<details>
+<summary>What the script does</summary>
+
+1. `brew install lua luarocks sdl2 cairo readline`
+2. `luarocks install luaturtle` with Homebrew path hints
+3. Adds `eval "$(luarocks path)"` to `~/.zshrc` (or `~/.bash_profile`) so
+   installed rocks are findable by Lua
+
+</details>
 
 ### Linux
 
