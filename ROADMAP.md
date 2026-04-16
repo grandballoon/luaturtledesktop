@@ -164,39 +164,69 @@ on Linux, manual paths on Windows).
 Remove turtleray.c, hello_raylib.lua. Update README.md dependencies section.
 
 ---
+## Milestone 3: REPL as Lua module (readline callback interface)
 
-## Milestone 3: Custom Lua Interpreter for REPL
+**Before starting:** Read DECISIONS.md #6 and GOTCHAS.md Readline section.
+The REPL is a Lua module backed by a small C binding. It does not fork
+the standard Lua interpreter.
 
-### 3.1 Create luaturtle.c
+### 3.1 Write turtle_readline.c
 
-Fork `lua.c` (the standard Lua 5.4 interpreter, ~600 lines).
-Modify the input loop to pump SDL2 events while waiting for terminal input:
+Minimal C binding (~150 lines) wrapping GNU readline's alternate (callback)
+interface. Exposes to Lua:
 
-- Replace `lua_readline` with a version that does non-blocking stdin reads
-  interleaved with `SDL_PollEvent` + re-rendering.
-- When the turtle window exists and is initialized, pump events and re-render
-  between input characters.
-- When no window exists (pre-`require("turtle")`), behave like standard Lua.
+- `readline.install_handler(prompt, callback)` — wraps
+  `rl_callback_handler_install`. Stash the Lua callback via `luaL_ref`.
+- `readline.read_char()` — wraps `rl_callback_read_char`. Reads one
+  character, dispatches to readline's state machine, invokes callback
+  only when a full line is ready.
+- `readline.stdin_has_input(timeout_ms)` — wraps `select()` on fd 0 with
+  a short timeout so the event loop doesn't burn CPU.
+- `readline.remove_handler()` — wraps `rl_callback_handler_remove`.
+- `readline.add_history(line)` — wraps `add_history` for up-arrow recall.
 
-**Test:** `luaturtle -i -e 'require("turtle")'` — type `forward(100)`,
-see it draw. Type `right(90)`. Type `forward(100)`. Window stays responsive
-between commands. ESC or window close exits.
+Link with `-lreadline` in the Makefile. Note: readline's state is global,
+so `turtle_readline` is not reentrant — do not run two REPLs
+simultaneously.
 
-### 3.2 Script mode
+**Test:** Minimal smoke test — install a handler, type a line, verify
+the callback fires with the right string.
 
-`luaturtle myscript.lua` — identical to current behavior. Script runs,
-`turtle.done()` enters idle event loop.
+### 3.2 Write turtle/repl.lua
 
-**Test:** All existing examples work identically to `lua myscript.lua`.
+REPL event loop in Lua. Structure: render → check input → execute. Render
+every iteration (~100 Hz given the 10ms stdin timeout) so the window stays
+responsive whether the user is typing, thinking, or away from the keyboard.
 
-### 3.3 Build and distribute luaturtle
+See MILESTONE_3.md for the full module source.
 
-The `luaturtle` binary bundles: Lua 5.4 interpreter + turtlecairo.so +
-turtle.lua + turtle/*.lua. This is what gets distributed — users download
-one thing, run it.
+Behavior: `load(line)` first, fall back to `load("return " .. line)` so
+bare expressions print their value (matches standard Lua REPL `=` behavior).
+`exit` or `quit` ends the loop. Errors print but don't kill the REPL.
 
-Makefile target: `make luaturtle`
+### 3.3 Script mode unchanged
 
+`lua myscript.lua` works exactly as it does after M2. No changes needed —
+script mode never touched the REPL.
+
+**Test:** All existing examples continue to run via `lua myscript.lua`.
+
+### 3.4 Entry point
+
+Canonical invocation: `lua -e 'require("turtle.repl").start()'`.
+Ship a trivial shell script `luaturtle`:
+
+```sh
+#!/bin/sh
+exec lua -e 'require("turtle.repl").start()' "$@"
+```
+
+### Acceptance test
+
+Launch the REPL. Type `forward(100)` — window appears, turtle draws. Type
+`right(90)`. Type `forward(100)`. Drag the window to resize — redraw happens
+smoothly during drag. Press up arrow — previous line appears for editing.
+Type `exit` — REPL terminates, window closes.
 ---
 
 ## Milestone 4: Animated Undo
@@ -237,33 +267,45 @@ Each working exercise becomes an example file in `examples/`.
 
 ---
 
-## Milestone 6: Packaging and Distribution
+## Milestone 6: Packaging and Distribution (LuaRocks)
 
-**Before starting:** Read GOTCHAS.md thoroughly. Every platform has
-distribution-specific issues documented there. Budget time for
-codesigning and notarization (macOS), SmartScreen (Windows), and
-glibc/AppImage concerns (Linux).
+**Decision:** LuaRocks-only distribution for now. No bundled interpreter.
+Users install Lua 5.4 + readline themselves and `luarocks install luaturtle`.
+A bundled per-platform binary remains a future option but is not in scope.
 
-### 6.1 macOS
+**Before starting:** Read GOTCHAS.md. Cross-platform Cairo/SDL2 concerns
+still apply to the compiled `.so` files.
 
-- Build universal binary (arm64 + x86_64).
-- Create `.app` bundle with bundled dylibs (SDL2, Cairo, pixman).
-- Codesign + notarize (requires Apple Developer ID, $99/year).
-- Distribute as `.dmg`.
+### 6.1 LuaRocks rockspec
 
-### 6.2 Linux
+Ship:
+- `turtlecairo.so` (built from `turtlecairo.c`, links SDL2 + Cairo)
+- `turtle_readline.so` (built from `turtle_readline.c`, links readline)
+- The `turtle/` Lua directory (core.lua, screen.lua, repl.lua, colors.lua, annotations.lua)
+- `turtle.lua`
+- `luaturtle` shell script (installed to bin path)
 
-- Build against system SDL2 + Cairo.
-- Create AppImage (self-contained, no installation needed).
-- Test on Ubuntu/Debian.
+Rockspec declares external dependencies: SDL2, Cairo, readline. Users
+install these via their system package manager (Homebrew, apt, etc.)
+before running `luarocks install`.
 
-### 6.3 Windows
+### 6.2 Platform notes
 
-- Build with MinGW or MSVC.
-- Ship `luaturtle.exe` + `SDL2.dll` + `cairo.dll` in a zip.
-- Optionally: static link for single-exe distribution.
-- Code signing (Authenticode) to avoid SmartScreen warnings.
+- **macOS:** Homebrew provides SDL2, Cairo, readline. No codesigning
+  concerns at the LuaRocks layer — users link against their own installed
+  libraries. Document Homebrew install commands in README.
+- **Linux:** SDL2, Cairo, readline are in every major distro. AppImage
+  concerns do not apply. Document apt/dnf install commands.
+- **Windows:** Blocked on the readline decision (WinEditLine/libedit vs.
+  Windows console API via `#ifdef`). Document as unsupported for now in
+  README; track in GOTCHAS.md.
 
+### 6.3 Future: bundled distribution
+
+Left open as a later milestone. If bundled distribution is pursued, it
+becomes "standard `lua` binary + our `.so` files + our `.lua` files in a
+folder" — not a forked interpreter. This is a packaging convenience, not
+an architectural commitment.
 ---
 
 ## Milestone 7: Curriculum Content (Parallel Track)

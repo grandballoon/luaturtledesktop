@@ -1,0 +1,6 @@
+#!/bin/sh
+# luaturtle — launch the Lua Turtle REPL
+# Usage:
+#   luaturtle              # start REPL
+#   luaturtle script.lua   # run a script then enter mainloop
+exec lua -e 'require("turtle.repl").start()' "$@"

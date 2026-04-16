@@ -21,7 +21,8 @@
 --                core:isvisible(), core:towards(x,y), core:distance(x,y),
 --                core:xcor(), core:ycor(), core:speed(n)
 --   Visibility:  core:showturtle(), core:hideturtle()
---   Undo:        core:_push_undo(), core:undo(),
+--   Undo:        core:_push_undo(), core:_commit_undo_segments(),
+--                core:undo() → {segments, current_state, previous_state} | nil,
 --                core:setundobuffer(n), core:undobufferentries()
 --   Head state:  core:get_head_state() → {x,y,angle,visible,...}  (Refactor 2, M2)
 --   Segments:    core:visible_segments() → delegates to screen:visible_segments()
@@ -540,10 +541,27 @@ function Core:_commit_undo_segments()
 end
 
 -- Undo the most recent command: mark its segments hidden and restore state.
--- Returns a description for animated undo (used by turtle.lua in M4).
+-- Returns a description for animated undo (Refactor 4 / M4).
+--
+-- Return shape:
+--   {
+--     segments       = { seg, ... },  -- actual segment objects being hidden
+--     current_state  = {x, y, angle}, -- turtle state BEFORE restoration
+--     previous_state = {x, y, angle}, -- turtle state AFTER restoration
+--   }
+-- Returns nil if the undo stack is empty.
 function Core:undo()
     if #self._undo_stack == 0 then return nil end
     local snap = table.remove(self._undo_stack)
+
+    -- Capture current state BEFORE restoration so turtle.lua can animate from here.
+    local cur_x, cur_y, cur_angle = self.x, self.y, self.angle
+
+    -- Collect the actual segment objects being hidden (not just indices).
+    local undone_segs = {}
+    for _, idx in ipairs(snap.segment_indices) do
+        table.insert(undone_segs, self.screen.segments[idx])
+    end
 
     -- Mark segment indices as hidden — does NOT truncate the shared log,
     -- so other turtles' interleaved segments are unaffected.
@@ -572,10 +590,11 @@ function Core:undo()
     self.screen._cleared_stamps = snap.cleared_stamps
     self.screen._next_stamp_id  = snap.next_stamp_id
 
-    -- Return description for animated undo (M4: turtle.lua can animate reversal)
+    -- Return description for animated undo (M4)
     return {
-        segment_indices = snap.segment_indices,
-        previous_state  = { x = snap.x, y = snap.y, angle = snap.angle },
+        segments       = undone_segs,
+        current_state  = { x = cur_x,  y = cur_y,  angle = cur_angle },
+        previous_state = { x = snap.x, y = snap.y, angle = snap.angle },
     }
 end
 

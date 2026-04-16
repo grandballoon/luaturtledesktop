@@ -227,6 +227,15 @@ function Renderer:_render_frame()
         end
     end
 
+    -- Draw undo-erase temp line if active (shrinks each frame as turtle walks back)
+    if self._temp_line then
+        local tl = self._temp_line
+        local x1, y1 = self:turtle_to_screen(tl.from[1], tl.from[2])
+        local x2, y2 = self:turtle_to_screen(tl.to[1],   tl.to[2])
+        local r, g, b, a = self:color255(tl.color)
+        cairo.draw_line(x1, y1, x2, y2, r, g, b, a, tl.width or 2)
+    end
+
     local br, bg, bb, ba = self:color255(screen.bg_color)
     cairo.clear(br, bg, bb, ba)   -- store background color for end_drawing
     cairo.end_drawing()           -- compose canvas + overlay + bg, present
@@ -270,6 +279,15 @@ function Renderer:mainloop()
         self:_render_frame()
     end
     cairo.close_window()
+end
+
+-- Returns true if the OS has signalled that the window should close.
+-- Useful for REPL mode where the loop needs to break cleanly.
+-- Note: render() already calls os.exit(0) on close, so this is a
+-- belt-and-suspenders check for callers that want explicit control.
+function Renderer:window_should_close()
+    if not self.initialized then return false end
+    return cairo.window_should_close()
 end
 
 function Renderer:close()

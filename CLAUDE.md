@@ -44,27 +44,16 @@ Raylib has no non-blocking event processing. The only way to pump OS events is t
 ## Module Structure
 
 ```
-luaturtledesktop/
-├── CLAUDE.md               # this file
-├── ARCHITECTURE.md          # detailed architecture (update pending)
-├── ROADMAP.md               # ordered implementation plan
-├── turtle.lua               # execution host: animation, undo, REPL, globals
+├── turtle.lua               # execution host: animation, undo, globals
 ├── turtle/
 │   ├── screen.lua           # shared state: segment log, bg_color, turtle registry
 │   ├── core.lua             # per-turtle state machine
+│   ├── repl.lua             # REPL event loop (SDL2 + readline interleaved)
 │   ├── colors.lua           # named color table
 │   └── annotations.lua      # LuaLS type stubs
 ├── turtlecairo.c            # C binding: Cairo drawing + SDL2 windowing
-├── tests/
-│   ├── run_tests.sh
-│   ├── test_helpers.lua
-│   ├── test_position.lua
-│   ├── test_pen.lua
-│   ├── test_multiturtle.lua  # per-turtle clear, reset, undo, fill isolation
-│   └── ...
-├── examples/
-│   └── ...
-└── Makefile
+├── turtle_readline.c        # C binding: GNU readline alternate interface
+├── luaturtle                # shell script: exec lua -e 'require("turtle.repl").start()' "$@"
 ```
 
 ## Coordinate System
@@ -104,10 +93,10 @@ Requires: Lua 5.4, SDL2, Cairo (all via Homebrew on macOS, apt on Linux).
 
 ## REPL Mode
 
-Requires a custom Lua interpreter (`luaturtle` binary) that pumps SDL2 events while waiting for terminal input. This is a modification to `lua.c` — the standard interpreter's `lua_readline` is replaced with one that interleaves `SDL_PollEvent` while blocking on stdin. The core and turtle.lua are unchanged; only the input loop is different.
+REPL mode is provided by a Lua module (`turtle.repl`) backed by a small C binding (`turtle_readline.c`) that wraps GNU readline's alternate interface (`rl_callback_handler_install`, `rl_callback_read_char`). The REPL's event loop interleaves `SDL_PollEvent` with `rl_callback_read_char`. Users invoke it with `lua -e 'require("turtle.repl").start()'` — no custom interpreter. A `luaturtle` shell script wraps this invocation for convenience.
 
-Script mode: `luaturtle myscript.lua` — runs script, enters idle event loop via `turtle.done()`.
-REPL mode: `luaturtle -i -e 'require("turtle")'` — each line executes synchronously, window stays responsive between inputs.
+Script mode: `lua myscript.lua` — runs script, enters idle event loop via `turtle.done()`. The script mode path never touches the REPL.
+REPL mode: `luaturtle` or `lua -e 'require("turtle.repl").start()'` — each line executes synchronously, window stays responsive between inputs.
 
 ## Web Version (Future, Separate Repo)
 

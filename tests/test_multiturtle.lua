@@ -445,4 +445,124 @@ test("M1.5: each turtle has independent pen state", function()
     assert(t2:pensize() == 2, "t2 pensize unchanged")
 end)
 
+----------------------------------------------------------------
+-- M4: Animated undo — undo() description shape (Refactor 4)
+-- These tests verify the description returned by core:undo() has the
+-- correct shape so turtle.lua can drive the reverse animation.
+----------------------------------------------------------------
+
+test("M4: undo() on forward returns description with segment objects", function()
+    local screen = Screen.new()
+    local t1 = Core.new(screen)
+
+    t1:_push_undo()
+    t1:forward(100)
+    t1:_commit_undo_segments()
+
+    local desc = t1:undo()
+    assert(desc ~= nil, "undo should return a description")
+    if not desc then return end
+    assert(type(desc.segments) == "table", "description.segments must be a table")
+    assert(#desc.segments == 1, "expected 1 segment, got " .. #desc.segments)
+    assert(desc.segments[1].type == "line", "segment type should be 'line'")
+end)
+
+test("M4: undo() description has correct current_state (pre-restoration position)", function()
+    local screen = Screen.new()
+    local t1 = Core.new(screen)
+
+    t1:_push_undo()
+    t1:forward(100)
+    t1:_commit_undo_segments()
+
+    -- Before undo: turtle is at (100, 0)
+    local desc = t1:undo()
+    assert(desc ~= nil, "undo should return a description")
+    if not desc then return end
+    h.assert_near(desc.current_state.x,     100, 0.001, "current_state.x should be 100")
+    h.assert_near(desc.current_state.y,       0, 0.001, "current_state.y should be 0")
+    h.assert_near(desc.current_state.angle,   0, 0.001, "current_state.angle should be 0")
+end)
+
+test("M4: undo() description has correct previous_state (restored position)", function()
+    local screen = Screen.new()
+    local t1 = Core.new(screen)
+
+    t1:_push_undo()
+    t1:forward(100)
+    t1:_commit_undo_segments()
+
+    local desc = t1:undo()
+    assert(desc ~= nil, "undo should return a description")
+    if not desc then return end
+    h.assert_near(desc.previous_state.x,     0, 0.001, "previous_state.x should be 0")
+    h.assert_near(desc.previous_state.y,     0, 0.001, "previous_state.y should be 0")
+    h.assert_near(desc.previous_state.angle, 0, 0.001, "previous_state.angle should be 0")
+    -- And core is actually at the previous_state
+    h.assert_pos(t1, 0, 0)
+end)
+
+test("M4: undo() on turn returns empty segments with angle diff", function()
+    local screen = Screen.new()
+    local t1 = Core.new(screen)
+
+    t1:_push_undo()
+    t1:right(90)
+    t1:_commit_undo_segments()
+
+    local desc = t1:undo()
+    assert(desc ~= nil, "undo should return a description")
+    if not desc then return end
+    assert(#desc.segments == 0, "turn creates no segments")
+    h.assert_near(desc.current_state.angle,  -90, 0.001, "current_state angle after right(90)")
+    h.assert_near(desc.previous_state.angle,   0, 0.001, "previous_state angle before right(90)")
+end)
+
+test("M4: undo() segment objects carry correct from/to for animation", function()
+    local screen = Screen.new()
+    local t1 = Core.new(screen)
+
+    t1:left(90)  -- face north (+y); left(90) → angle=90
+    t1:_push_undo()
+    t1:forward(50)
+    t1:_commit_undo_segments()
+
+    local desc = t1:undo()
+    assert(desc ~= nil, "undo should return a description")
+    if not desc then return end
+    local seg = desc.segments[1]
+    assert(seg ~= nil, "segment should exist")
+    if not seg then return end
+    h.assert_near(seg.from[1],  0, 0.001, "line from x=0")
+    h.assert_near(seg.from[2],  0, 0.001, "line from y=0")
+    h.assert_near(seg.to[1],    0, 0.001, "line to x=0 (north move)")
+    h.assert_near(seg.to[2],   50, 0.001, "line to y=50")
+end)
+
+test("M4: undo() description consistent with state after restoration", function()
+    -- current_state describes where turtle WAS; after call core is at previous_state
+    local screen = Screen.new()
+    local t1 = Core.new(screen)
+
+    t1:right(45)
+    t1:forward(100)
+    t1:_push_undo()
+    t1:forward(75)
+    t1:_commit_undo_segments()
+
+    local pre_x, pre_y = t1:position()   -- position after 2 forwards, before undo
+    local desc = t1:undo()
+    assert(desc ~= nil, "undo should return a description")
+    if not desc then return end
+
+    -- current_state should match what position was just before undo
+    h.assert_near(desc.current_state.x, pre_x, 0.001, "current_state.x matches pre-undo x")
+    h.assert_near(desc.current_state.y, pre_y, 0.001, "current_state.y matches pre-undo y")
+
+    -- Core is now at previous_state
+    local post_x, post_y = t1:position()
+    h.assert_near(desc.previous_state.x, post_x, 0.001, "previous_state.x matches post-undo x")
+    h.assert_near(desc.previous_state.y, post_y, 0.001, "previous_state.y matches post-undo y")
+end)
+
 h.run("test_multiturtle")

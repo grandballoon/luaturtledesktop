@@ -91,25 +91,38 @@ remains a pure state machine.
 
 ---
 
-## 6. REPL: Custom Lua interpreter
+## 6. REPL: Lua module with readline callback interface
 
-**Decision:** Ship a `luaturtle` binary — a modified `lua.c` that pumps SDL2
-events while waiting for terminal input.
+**Decision:** Ship the REPL as a Lua module (`turtle.repl`) backed by a
+small C binding (`turtle_readline.c`) that wraps GNU readline's alternate
+(callback) interface. An event loop interleaves `SDL_PollEvent` with
+`rl_callback_read_char`.
 
 **Alternatives considered:**
-- **debug.sethook:** Fires between Lua instructions, but NOT while blocked on
-  `fgets` (waiting for terminal input). Window freezes at the prompt.
-- **readline callback interface:** Uses `rl_callback_handler_install` for
-  character-by-character input. More modular but adds readline dependency.
+- **Custom Lua interpreter (fork `lua.c`):** Modify the standard
+  interpreter's input loop to pump `SDL_PollEvent` between characters.
+  No readline dependency. BUT: requires tracking Lua 5.4 patch releases,
+  distribution requires a custom binary instead of a module, REPL becomes
+  a binary artifact rather than a library feature. Forks the standard
+  Lua interpreter — a commitment we don't want to make for what is
+  fundamentally a library.
+- **debug.sethook:** Fires between Lua instructions, but NOT while blocked
+  on `fgets` (waiting for terminal input). Window freezes at the prompt.
 - **Background thread for window:** Move SDL2 to a dedicated thread. Clean
   but adds thread synchronization complexity. Also blocked by macOS's
   main-thread requirement for UI.
 
-**Why custom interpreter:** Lua's standard interpreter is ~600 lines of C.
-The modification is small — replace the input-reading loop with one that
-interleaves `SDL_PollEvent`. No threading, no readline dependency, works
-on all platforms. macOS main-thread constraint is satisfied because the
-SDL2 calls happen on the main thread (the one reading input).
+**Why readline callback interface:**
+- Doesn't fork the standard Lua interpreter — works with any Lua 5.4 host.
+- REPL is a library feature, not a binary artifact. Distribution is
+  standard `lua` + our `.so` + our `.lua` files.
+- Cleaner modular story: `turtle.repl` is the desktop execution host;
+  on web, the CodeMirror `onSubmit` handler is the execution host. Both
+  route through `load(source)` → `pcall(chunk)` → render. The symmetry
+  is real instead of aspirational.
+- readline is nearly universal on macOS/Linux. Windows needs a separate
+  decision (WinEditLine/libedit drop-in vs. `#ifdef` to Windows console
+  API) — deferred, see GOTCHAS.md.
 
 ---
 

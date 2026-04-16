@@ -60,6 +60,18 @@ local function with_undo(c, fn)
 end
 
 ----------------------------------------------------------------
+-- Animation helpers
+----------------------------------------------------------------
+
+-- Returns the step granularity for the given speed setting (1–10).
+-- Higher speed → bigger steps → fewer intermediate renders → visually faster.
+-- speed 1 → 1px/deg, speed 5 → 4px/deg, speed 10 → 16px/deg
+local function step_size_for_speed(s)
+    if s == 0 then return math.huge end
+    return math.max(1, math.floor(2 ^ (s / 2.5)))
+end
+
+----------------------------------------------------------------
 -- Per-turtle command implementations (parameterized by core `c`).
 -- These contain all the animated / render logic. The global API functions
 -- and Turtle() method wrappers are thin shells around these.
@@ -76,7 +88,7 @@ local function _forward(c, distance)
             c:forward(distance)
             return
         end
-        local step_size  = 2
+        local step_size  = step_size_for_speed(c.speed_setting)
         local steps      = math.max(1, math.floor(math.abs(distance) / step_size))
         local step_dist  = distance / steps
         local delay      = renderer:frame_delay()
@@ -96,7 +108,7 @@ local function _right(c, angle)
             if c.speed_setting ~= 0 then renderer:render() end
             return
         end
-        local step_angle = 2
+        local step_angle = step_size_for_speed(c.speed_setting)
         local steps      = math.max(1, math.floor(math.abs(angle) / step_angle))
         local step       = angle / steps
         local delay      = renderer:frame_delay()
@@ -116,16 +128,17 @@ local function _circle(c, radius, extent, steps)
         if not steps then
             steps = math.max(4, math.floor(math.abs(extent) / 6))
         end
-        local RAD        = math.pi / 180
-        local step_angle = extent / steps
-        local step_len   = 2 * math.abs(radius) * math.sin(math.abs(step_angle) / 2 * RAD)
+        local RAD          = math.pi / 180
+        local step_angle   = extent / steps
+        local step_len     = 2 * math.abs(radius) * math.sin(math.abs(step_angle) / 2 * RAD)
         if radius < 0 then step_angle = -step_angle end
-        local delay = renderer:frame_delay()
-        for _ = 1, steps do
+        local delay        = renderer:frame_delay()
+        local render_every = step_size_for_speed(c.speed_setting)
+        for i = 1, steps do
             c:left(step_angle / 2)
             c:forward(step_len)
             c:left(step_angle / 2)
-            if c.speed_setting ~= 0 then
+            if c.speed_setting ~= 0 and (i % render_every == 0 or i == steps) then
                 renderer:render()
                 if delay > 0 then renderer:sleep(delay) end
             end
@@ -260,8 +273,102 @@ local function _hideturtle(c)
     with_undo(c, function() c:hideturtle(); renderer:render() end)
 end
 
+-- Animated undo (M4 / Refactor 4).
+--
+-- core:undo() applies the state restoration and returns a description:
+--   { segments, current_state {x,y,angle}, previous_state {x,y,angle} }
+--
+-- Animation rules (speed=0 → instant for all):
+--   • All-line segments, heading unchanged → reverse the forward/back path.
+--     Works for any step count: we walk the segments in reverse order, each
+--     going from its .to back to its .from.  This animates both single-step
+--     (speed=0 or large distance) and multi-step (speed>0) forwards correctly.
+--   • No segments, heading changed → reverse the turn.
+--   • Anything else (fill, dot, stamp, text, circle, compound) → instant.
 local function _undo(c)
-    c:undo()
+    local desc = c:undo()
+    if not desc then return end
+
+    local speed = c.speed_setting
+    if speed ~= 0 then
+        local segs  = desc.segments
+        local curr  = desc.current_state
+        local prev  = desc.previous_state
+
+        -- Detect all-line undo with unchanged heading (forward / back / setpos)
+        local all_lines = #segs > 0
+        for _, seg in ipairs(segs) do
+            if seg.type ~= "line" then all_lines = false; break end
+        end
+        -- (curr.angle - prev.angle) mod 360: 0 = no change, nonzero = rotation
+        local angle_diff = (curr.angle - prev.angle) % 360
+        local heading_unchanged = angle_diff < 0.001 or angle_diff > 359.999
+
+        if all_lines and heading_unchanged then
+            -- Place turtle at the "current" end of the path (where it was
+            -- before undo) and step backward through each sub-segment in
+            -- reverse order, ending exactly at prev position.
+            -- The segment is already hidden; we draw a shrinking _temp_line on
+            -- the overlay so the line appears to be erased as the turtle walks back.
+            c.x     = curr.x
+            c.y     = curr.y
+            c.angle = curr.angle
+            -- Rebuild canvas without the hidden segment, then set up temp line.
+            renderer.needs_full_redraw = true
+            local first_seg = segs[1]
+            renderer._temp_line = {
+                from  = { prev.x, prev.y },
+                to    = { curr.x, curr.y },
+                color = first_seg.color,
+                width = first_seg.width or 2,
+            }
+            local delay     = renderer:frame_delay()
+            local step_size = step_size_for_speed(c.speed_setting)
+            for i = #segs, 1, -1 do
+                local seg = segs[i]
+                local dx   = seg.from[1] - seg.to[1]
+                local dy   = seg.from[2] - seg.to[2]
+                local dist = math.sqrt(dx * dx + dy * dy)
+                if dist > 0 then
+                    local steps = math.max(1, math.floor(dist / step_size))
+                    local sx, sy = dx / steps, dy / steps
+                    for _ = 1, steps do
+                        c.x = c.x + sx
+                        c.y = c.y + sy
+                        renderer._temp_line.to = { c.x, c.y }
+                        renderer:render()
+                        if delay > 0 then renderer:sleep(delay) end
+                    end
+                end
+            end
+            -- Snap to exact restored position (eliminates float drift)
+            c.x     = prev.x
+            c.y     = prev.y
+            c.angle = prev.angle
+            renderer._temp_line = nil
+
+        elseif #segs == 0 and not heading_unchanged then
+            -- Reverse a turn: animate from current angle back to previous.
+            -- Direct delta (no modular normalization needed: turns are recorded
+            -- as exact angle values, so linear interpolation is correct).
+            c.x     = curr.x
+            c.y     = curr.y
+            c.angle = curr.angle
+            local delta      = prev.angle - curr.angle
+            local step_angle = step_size_for_speed(c.speed_setting)
+            local steps      = math.max(1, math.floor(math.abs(delta) / step_angle))
+            local step       = delta / steps
+            local delay      = renderer:frame_delay()
+            for _ = 1, steps do
+                c.angle = c.angle + step
+                renderer:render()
+                if delay > 0 then renderer:sleep(delay) end
+            end
+            c.angle = prev.angle
+        end
+        -- else: instant (fill, dot, stamp, text, circle, compound) — fall through
+    end
+
     renderer:request_full_redraw()
     renderer:render()
 end

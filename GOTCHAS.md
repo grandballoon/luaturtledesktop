@@ -66,12 +66,13 @@ before any distribution or cross-platform work.
 - This is significantly more build infrastructure than Raylib's zero-dep
   static linking. Budget time for getting the Windows build right.
 
-### SDL2 WinMain
+### SDL2 WinMain (no longer applies)
 
-- SDL2 redefines `main` to `SDL_main` via a macro in `SDL.h` and provides
-  its own `WinMain` entry point in `SDL2main.lib`. The `luaturtle` custom
-  interpreter must link against `SDL2main.lib` and use `main()`. This is
-  standard SDL2 practice but will bite you if you don't know about it.
+- Previously a concern when the REPL was a forked `lua.c` binary. Under
+  the current architecture (REPL is a Lua module; `turtlecairo.dll` is
+  loaded by the standard `lua.exe`), there is no custom executable to
+  link against `SDL2main.lib`. SDL2's `WinMain` machinery is irrelevant
+  to DLL-based distribution.
 
 ### SmartScreen
 
@@ -166,6 +167,47 @@ Native-per-platform is probably fine. But decide consciously:
 ---
 
 ## SDL2-Specific
+
+---
+
+## Readline
+
+### Global state / non-reentrancy
+
+- GNU readline maintains global state (`rl_instream`, `rl_outstream`,
+  internal line buffers). `turtle_readline` is therefore not reentrant —
+  running two REPLs simultaneously in one process will corrupt state.
+  Fine for a single-REPL tool, documented here so nobody tries.
+
+### CPU burn without a timeout
+
+- The event loop must gate `rl_callback_read_char` with
+  `readline.stdin_has_input(timeout_ms)` (wraps `select()` on fd 0).
+  Without the timeout, the loop will spin at 100% CPU. 10 ms gives ~100 Hz
+  render rate, which keeps the window responsive during drag/resize and
+  still leaves the CPU mostly idle.
+
+### Windows support: open question
+
+- GNU readline historically does not work well on native Windows. Two
+  workable options remain undecided:
+  (a) WinEditLine or libedit as a readline-compatible drop-in — less code
+      to write, adds a dependency with its own build quirks.
+  (b) `#ifdef` the Windows path to use the Windows console API directly
+      instead of readline — more conditional C code, smaller dependency
+      set.
+  Under the current LuaRocks-only distribution (see ROADMAP.md M6), this
+  is not blocking — Windows support is documented as pending. Decide
+  before a Windows release.
+
+### macOS / libedit compatibility
+
+- macOS ships libedit with a readline-compatible wrapper at
+  `/usr/lib/libedit.dylib`. Homebrew provides real GNU readline. Link
+  order and include paths matter: be explicit about which is used.
+  libedit's callback interface is mostly compatible but has quirks (e.g.,
+  slightly different behavior on empty lines). Prefer Homebrew readline
+  on macOS.
 
 ### SDL_PollEvent blocks during window drag/resize on Windows
 

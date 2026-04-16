@@ -15,46 +15,60 @@ LUA ?= lua$(LUA_VERSION)
 
 ifeq ($(UNAME),Darwin)
     # macOS / Homebrew
-    LUA_INCDIR   ?= /opt/homebrew/include/lua$(LUA_VERSION)
-    LUA_LIBDIR   ?= /opt/homebrew/lib
-    SHARED_EXT    = so
-    SHARED_FLAGS  = -shared -undefined dynamic_lookup
+    LUA_INCDIR        ?= /opt/homebrew/include/lua$(LUA_VERSION)
+    LUA_LIBDIR        ?= /opt/homebrew/lib
+    READLINE_INCDIR   ?= /opt/homebrew/opt/readline/include
+    READLINE_LIBDIR   ?= /opt/homebrew/opt/readline/lib
+    SHARED_EXT         = so
+    SHARED_FLAGS       = -shared -undefined dynamic_lookup
     # Cairo and SDL2 via pkg-config
-    PKG_CFLAGS   := $(shell pkg-config --cflags sdl2 cairo)
-    PKG_LIBS     := $(shell pkg-config --libs   sdl2 cairo)
+    PKG_CFLAGS        := $(shell pkg-config --cflags sdl2 cairo)
+    PKG_LIBS          := $(shell pkg-config --libs   sdl2 cairo)
 else ifeq ($(UNAME),Linux)
     # Linux
-    LUA_INCDIR   ?= /usr/include/lua$(LUA_VERSION)
-    LUA_LIBDIR   ?= /usr/lib
-    SHARED_EXT    = so
-    SHARED_FLAGS  = -shared
-    PKG_CFLAGS   := $(shell pkg-config --cflags sdl2 cairo)
-    PKG_LIBS     := $(shell pkg-config --libs   sdl2 cairo)
+    LUA_INCDIR        ?= /usr/include/lua$(LUA_VERSION)
+    LUA_LIBDIR        ?= /usr/lib
+    READLINE_INCDIR   ?= /usr/include
+    READLINE_LIBDIR   ?= /usr/lib
+    SHARED_EXT         = so
+    SHARED_FLAGS       = -shared
+    PKG_CFLAGS        := $(shell pkg-config --cflags sdl2 cairo)
+    PKG_LIBS          := $(shell pkg-config --libs   sdl2 cairo)
 else
-    # Windows (MinGW) — adjust paths as needed
-    LUA_INCDIR   ?= C:/lua54/include
-    LUA_LIBDIR   ?= C:/lua54/lib
-    SHARED_EXT    = dll
-    SHARED_FLAGS  = -shared
-    PKG_CFLAGS    =
-    PKG_LIBS      = -lSDL2 -lcairo
+    # Windows (MinGW) — readline support deferred (see GOTCHAS.md)
+    LUA_INCDIR        ?= C:/lua54/include
+    LUA_LIBDIR        ?= C:/lua54/lib
+    READLINE_INCDIR   ?=
+    READLINE_LIBDIR   ?=
+    SHARED_EXT         = dll
+    SHARED_FLAGS       = -shared
+    PKG_CFLAGS         =
+    PKG_LIBS           = -lSDL2 -lcairo
 endif
 
 CC     ?= cc
 CFLAGS  = -O2 -fPIC -Wall -Wextra -I$(LUA_INCDIR) $(PKG_CFLAGS)
 LDFLAGS = -L$(LUA_LIBDIR) $(PKG_LIBS)
 
-TARGET = turtlecairo.$(SHARED_EXT)
+# readline flags (separate from Cairo/SDL2 so the cairo target stays clean)
+READLINE_CFLAGS  = -I$(READLINE_INCDIR)
+READLINE_LDFLAGS = -L$(READLINE_LIBDIR) -lreadline
 
-.PHONY: all clean test square
+TARGET          = turtlecairo.$(SHARED_EXT)
+READLINE_TARGET = turtle_readline.$(SHARED_EXT)
 
-all: $(TARGET)
+.PHONY: all clean test square repl
+
+all: $(TARGET) $(READLINE_TARGET)
 
 $(TARGET): turtlecairo.c
 	$(CC) $(SHARED_FLAGS) $(CFLAGS) -o $@ $< $(LDFLAGS)
 
+$(READLINE_TARGET): turtle_readline.c
+	$(CC) $(SHARED_FLAGS) $(CFLAGS) $(READLINE_CFLAGS) -o $@ $< $(READLINE_LDFLAGS)
+
 clean:
-	rm -f $(TARGET) turtleray.so
+	rm -f $(TARGET) $(READLINE_TARGET) turtleray.so
 
 test:
 	$(LUA) tests/test_position.lua
@@ -63,3 +77,6 @@ test:
 
 square: $(TARGET)
 	$(LUA) examples/square.lua
+
+repl: all
+	$(LUA) -e 'require("turtle.repl").start()'
